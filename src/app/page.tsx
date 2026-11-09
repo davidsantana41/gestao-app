@@ -1,6 +1,9 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
 
 interface SaidaItem {
   id: string;
@@ -14,6 +17,16 @@ interface CustoFixoItem {
   nome: string;
   valorMensal: number;
   cor?: string;
+}
+
+interface DadosPersistidos {
+  custosFixos: CustoFixoItem[];
+  nomeReserva1: string;
+  nomeReserva2: string;
+  nomeReserva3: string;
+  lembrete: string;
+  historico: Lancamento[];
+  modoEscuro: boolean;
 }
 
 interface Lancamento {
@@ -78,6 +91,142 @@ export default function Home() {
 
   const [historico, setHistorico] = useState<Lancamento[]>([]);
   const [idEditando, setIdEditando] = useState<string | null>(null);
+  const [uid, setUid] = useState<string | null>(null);
+  const [dadosCarregados, setDadosCarregados] = useState(false);
+  const [firebasePronto, setFirebasePronto] = useState(false);
+  const [statusPersistencia, setStatusPersistencia] = useState('Conectando ao armazenamento...');
+
+  const STORAGE_KEY = 'gestao-app-dados-v1';
+
+  const aplicarDados = (dados: Partial<DadosPersistidos>) => {
+    if (Array.isArray(dados.custosFixos)) setCustosFixos(dados.custosFixos);
+    if (typeof dados.nomeReserva1 === 'string') setNomeReserva1(dados.nomeReserva1);
+    if (typeof dados.nomeReserva2 === 'string') setNomeReserva2(dados.nomeReserva2);
+    if (typeof dados.nomeReserva3 === 'string') setNomeReserva3(dados.nomeReserva3);
+    if (typeof dados.lembrete === 'string') setLembrete(dados.lembrete);
+    if (Array.isArray(dados.historico)) setHistorico(dados.historico);
+    if (typeof dados.modoEscuro === 'boolean') setModoEscuro(dados.modoEscuro);
+  };
+
+  const capturarDados = (): DadosPersistidos => ({
+    custosFixos,
+    nomeReserva1,
+    nomeReserva2,
+    nomeReserva3,
+    lembrete,
+    historico,
+    modoEscuro,
+  });
+
+  // Cria uma identidade anônima persistente no navegador para separar os dados de cada instalação.
+  useEffect(() => {
+    let ativo = true;
+    let criandoUsuario = false;
+
+    const unsubscribe = onAuthStateChanged(auth, async (usuario) => {
+      if (!ativo) return;
+      if (usuario) {
+        setUid(usuario.uid);
+        return;
+      }
+      if (criandoUsuario) return;
+      criandoUsuario = true;
+      try {
+        const credencial = await signInAnonymously(auth);
+        if (ativo) setUid(credencial.user.uid);
+      } catch (erro) {
+        console.error('Falha na autenticação anônima do Firebase:', erro);
+        if (ativo) {
+          setStatusPersistencia('Salvamento local ativo; sincronização na nuvem indisponível.');
+          setDadosCarregados(true);
+        }
+      }
+    });
+
+    return () => {
+      ativo = false;
+      unsubscribe();
+    };
+  }, []);
+
+  // Recupera a cópia da nuvem; na primeira utilização, migra os dados locais para o Firestore.
+  useEffect(() => {
+    if (!uid) return;
+    let ativo = true;
+
+    const carregar = async () => {
+      try {
+        const referencia = doc(db, 'users', uid, 'appData', 'main');
+        const snapshot = await getDoc(referencia);
+
+        if (snapshot.exists()) {
+          if (ativo) aplicarDados(snapshot.data() as Partial<DadosPersistidos>);
+        } else {
+          let dadosIniciais: DadosPersistidos = capturarDados();
+          try {
+            const locais = localStorage.getItem(STORAGE_KEY);
+            if (locais) {
+              const parseados = JSON.parse(locais) as Partial<DadosPersistidos>;
+              dadosIniciais = { ...dadosIniciais, ...parseados };
+              if (ativo) aplicarDados(parseados);
+            }
+          } catch (erro) {
+            console.warn('Não foi possível recuperar os dados locais antigos:', erro);
+          }
+          await setDoc(referencia, dadosIniciais);
+        }
+
+        if (ativo) {
+          setFirebasePronto(true);
+          setDadosCarregados(true);
+          setStatusPersistencia('Dados sincronizados com a nuvem.');
+        }
+      } catch (erro) {
+        console.error('Falha ao carregar dados do Firestore:', erro);
+        if (ativo) {
+          try {
+            const locais = localStorage.getItem(STORAGE_KEY);
+            if (locais) aplicarDados(JSON.parse(locais) as Partial<DadosPersistidos>);
+          } catch (erroLocal) {
+            console.warn('Não foi possível recuperar o backup local:', erroLocal);
+          }
+          setFirebasePronto(false);
+          setDadosCarregados(true);
+          setStatusPersistencia('Salvamento local ativo; verifique a configuração do Firebase para sincronizar.');
+        }
+      }
+    };
+
+    carregar();
+    return () => { ativo = false; };
+  }, [uid]);
+
+  // Mantém um backup no navegador e sincroniza alterações com o Firestore.
+  useEffect(() => {
+    if (!dadosCarregados) return;
+
+    const dados = capturarDados();
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(dados));
+    } catch (erro) {
+      console.error('Não foi possível salvar os dados neste navegador:', erro);
+    }
+
+    if (!firebasePronto || !uid) return;
+
+    setStatusPersistencia('Salvando alterações...');
+    const temporizador = window.setTimeout(async () => {
+      try {
+        await setDoc(doc(db, 'users', uid, 'appData', 'main'), dados);
+        setStatusPersistencia('Dados sincronizados com a nuvem.');
+      } catch (erro) {
+        console.error('Falha ao sincronizar dados com o Firestore:', erro);
+        setStatusPersistencia('Backup local salvo; falha na sincronização com a nuvem.');
+      }
+    }, 700);
+
+    return () => window.clearTimeout(temporizador);
+  }, [custosFixos, nomeReserva1, nomeReserva2, nomeReserva3, lembrete, historico, modoEscuro, dadosCarregados, firebasePronto, uid]);
 
   const infoDataAtual = useMemo(() => {
     const hoje = new Date();
@@ -423,6 +572,10 @@ export default function Home() {
             </div>
           </div>
         </header>
+
+        <p role="status" aria-live="polite" className={`mb-4 text-xs ${modoEscuro ? 'text-white/50' : 'text-slate-500'}`}>
+          {dadosCarregados ? statusPersistencia : 'Carregando seus dados com segurança...'}
+        </p>
 
         {/* ABA LANÇAMENTO DIÁRIO */}
         {abaAtiva === 'lancamento' && (
