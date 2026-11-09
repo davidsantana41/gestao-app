@@ -2,9 +2,10 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Cada instalação autenticada só pode ler e gravar seu próprio documento.
+    // Cada instalação autenticada só pode acessar seu próprio documento.
     match /users/{userId}/appData/main {
-      allow read, create, update: if request.auth != null
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
           'custosFixos',
