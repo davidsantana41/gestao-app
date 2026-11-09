@@ -251,8 +251,9 @@ export default function Home() {
       }
     }
 
-    const diasTrabalhoRegistrados = historico.filter(h => h.tipo === 'turno').length;
-    const diasRestantes = Math.max(totalDiasUteisMes - diasTrabalhoRegistrados, 1);
+    // O custo mensal é distribuído pelos dias de trabalho previstos no mês inteiro.
+    // Não subtraímos dias já registrados: isso faria o custo por dia aumentar ao longo do mês.
+    const diasRestantes = Math.max(totalDiasUteisMes, 1);
 
     let somaDiaria = 0;
     const porItem: { [id: string]: number } = {};
@@ -414,6 +415,7 @@ export default function Home() {
     let totalFatGeral = 0;
     let totalDespGeral = 0;
     let totalLiqGeral = 0;
+    let totalLiqTurnos = 0;
     let totalCombGeral = 0;
     let totalKmTrabGeral = 0;
     let totalKmTotalGeral = 0;
@@ -431,6 +433,7 @@ export default function Home() {
       totalFatGeral += item.faturamentoBruto;
       totalDespGeral += item.totalDespesas;
       totalLiqGeral += item.liquido;
+      if (item.tipo === 'turno') totalLiqTurnos += item.liquido;
       totalCombGeral += item.combustivel;
       totalKmTrabGeral += (item.kmTrabalhado || 0);
       totalKmTotalGeral += (item.kmTotal || 0);
@@ -517,6 +520,7 @@ export default function Home() {
       totalFatGeral,
       totalDespGeral,
       totalLiqGeral,
+      totalLiqTurnos,
       totalCombGeral,
       totalKmTrabGeral,
       totalKmTotalGeral,
@@ -1057,7 +1061,7 @@ export default function Home() {
                 <div>
                   <span className={`text-xs block mb-1 ${modoEscuro ? 'text-white/60' : 'text-slate-500'}`}>Média Líq / Dia:</span>
                   <strong className={`text-base ${modoEscuro ? 'text-white/90' : 'text-slate-800'}`}>
-                    R$ {relatoriosAcumulados.totalDiasTrabalho > 0 ? (relatoriosAcumulados.totalLiqGeral / relatoriosAcumulados.totalDiasTrabalho).toFixed(2) : '0.00'}
+                    R$ {relatoriosAcumulados.totalDiasTrabalho > 0 ? (relatoriosAcumulados.totalLiqTurnos / relatoriosAcumulados.totalDiasTrabalho).toFixed(2) : '0.00'}
                   </strong>
                 </div>
                 <div>
