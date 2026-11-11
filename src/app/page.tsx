@@ -270,8 +270,10 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
   // O painel usa os valores visíveis digitados, inclusive quando há vírgula decimal.
   const litrosCalculados = lerNumero(texto_litros);
-  const precoLitroMedio = litrosCalculados > 0 ? lerNumero(texto_valorCombustivel) / litrosCalculados : 0;
-  const consumoKmL = litrosCalculados > 0 ? lerNumero(texto_kmTrabalhado) / litrosCalculados : 0;
+  const gastoCalculado = lerNumero(texto_valorCombustivel);
+  const kmCalculados = lerNumero(texto_kmTrabalhado);
+  const precoLitroMedio = litrosCalculados > 0 ? gastoCalculado / litrosCalculados : 0;
+  const consumoKmL = litrosCalculados > 0 ? kmCalculados / litrosCalculados : 0;
   
   const temMovimentoNoTurno = faturamentoBruto > 0 || valorCombustivel > 0 || totalReservasTurno > 0 || idEditando !== null;
 
@@ -801,10 +803,21 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         />
                       </div>
                     </div>
-                    <div className={`text-xs pt-3 border-t flex justify-between ${modoEscuro ? 'border-white/10 text-white/60' : 'border-slate-200 text-slate-600'}`}>
-                      <span>Preço Médio: <strong className={modoEscuro ? 'text-white' : 'text-slate-800'}>{precoLitroMedio.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/L</strong></span>
-                      <span>Consumo: <strong className={modoEscuro ? 'text-white' : 'text-slate-800'}>{consumoKmL.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} km/L</strong></span>
+                    <div aria-live="polite" className={`text-xs pt-3 border-t grid grid-cols-2 gap-3 ${modoEscuro ? 'border-white/10 text-white/60' : 'border-slate-200 text-slate-600'}`}>
+                      <div>Preço médio por litro:
+                        <strong className={`block text-base mt-1 ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>
+                          {litrosCalculados > 0 ? precoLitroMedio.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'R$ 0,00'}/L
+                        </strong>
+                        <span className="block mt-1 opacity-70">{gastoCalculado.toLocaleString('pt-BR', {minimumFractionDigits:2})} ÷ {litrosCalculados.toLocaleString('pt-BR')} L</span>
+                      </div>
+                      <div className="text-right">Consumo médio:
+                        <strong className={`block text-base mt-1 ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>
+                          {consumoKmL.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})} km/L
+                        </strong>
+                        <span className="block mt-1 opacity-70">{kmCalculados.toLocaleString('pt-BR')} km ÷ {litrosCalculados.toLocaleString('pt-BR')} L</span>
+                      </div>
                     </div>
+                  </div>
                   </div>
 
                   <div className="max-w-sm mx-auto w-full text-center">
