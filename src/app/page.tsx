@@ -8,9 +8,9 @@ import { auth, db } from '@/lib/firebase';
 
 // Aceita valores brasileiros com vírgula decimal (ex.: 100,87 e 28,5).
 const lerNumero = (texto: string): number => {
-  const limpo = texto.trim().replace(/\\s/g, '');
+  const limpo = texto.trim().replace(/\s/g, '');
   if (!limpo) return 0;
-  const normalizado = limpo.includes(',') ? limpo.replace(/\\./g, '').replace(',', '.') : limpo;
+  const normalizado = limpo.includes(',') ? limpo.replace(/\./g, '').replace(',', '.') : limpo;
   const numero = Number(normalizado);
   return Number.isFinite(numero) && numero >= 0 ? numero : 0;
 };
@@ -268,8 +268,10 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
   const totalReservasTurno = valReservaAcidente;
 
-  const precoLitroMedio = litros > 0 ? valorCombustivel / litros : 0;
-  const consumoKmL = litros > 0 ? kmTrabalhado / litros : 0;
+  // O painel usa os valores visíveis digitados, inclusive quando há vírgula decimal.
+  const litrosCalculados = lerNumero(texto_litros);
+  const precoLitroMedio = litrosCalculados > 0 ? lerNumero(texto_valorCombustivel) / litrosCalculados : 0;
+  const consumoKmL = litrosCalculados > 0 ? lerNumero(texto_kmTrabalhado) / litrosCalculados : 0;
   
   const temMovimentoNoTurno = faturamentoBruto > 0 || valorCombustivel > 0 || totalReservasTurno > 0 || idEditando !== null;
 
@@ -527,7 +529,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         {/* Cabeçalho */}
         <header className={`mb-6 flex flex-col md:flex-row justify-between items-center p-6 rounded-2xl shadow-lg border gap-4 transition-all duration-300 ${modoEscuro ? 'bg-white/5 backdrop-blur-lg border-white/10' : 'bg-white border-slate-200'}`}>
           <div>
-            <h1 className={`text-2xl md:text-3xl font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>
+            <h1 className={`text-2xl md:text-3xl font-bold text-center ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>
               Painel de Controle
             </h1>
             <p className={`text-sm mt-1 capitalize ${modoEscuro ? 'text-white/60' : 'text-slate-500'}`}>
@@ -800,12 +802,12 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                       </div>
                     </div>
                     <div className={`text-xs pt-3 border-t flex justify-between ${modoEscuro ? 'border-white/10 text-white/60' : 'border-slate-200 text-slate-600'}`}>
-                      <span>Preço Médio: <strong className={modoEscuro ? 'text-white' : 'text-slate-800'}>R$ {precoLitroMedio.toFixed(2)}/L</strong></span>
-                      <span>Consumo: <strong className={modoEscuro ? 'text-white' : 'text-slate-800'}>{consumoKmL.toFixed(2)} Km/L</strong></span>
+                      <span>Preço Médio: <strong className={modoEscuro ? 'text-white' : 'text-slate-800'}>{precoLitroMedio.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/L</strong></span>
+                      <span>Consumo: <strong className={modoEscuro ? 'text-white' : 'text-slate-800'}>{consumoKmL.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} km/L</strong></span>
                     </div>
                   </div>
 
-                  <div className="max-w-sm">
+                  <div className="max-w-sm mx-auto w-full text-center">
                     <label className={`block text-sm font-semibold mb-2 ${modoEscuro ? 'text-white/80' : 'text-slate-700'}`}>Reserva de Acidente</label>
                     <div aria-live="polite" className={`w-full px-4 py-3 rounded-lg border font-bold ${modoEscuro ? 'bg-black/50 border-white/10 text-white' : 'bg-slate-100 border-slate-200 text-slate-800'}`}>
                       {valReservaAcidente.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
