@@ -269,9 +269,11 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
   const totalReservasTurno = valReservaAcidente;
 
   // O painel usa os valores visíveis digitados, inclusive quando há vírgula decimal.
-  const litrosCalculados = lerNumero(texto_litros);
-  const gastoCalculado = lerNumero(texto_valorCombustivel);
-  const kmCalculados = lerNumero(texto_kmTrabalhado);
+  // Os valores numéricos são a fonte de verdade para os cálculos do turno.
+  // Os textos dos inputs servem apenas para manter a vírgula durante a digitação.
+  const litrosCalculados = litros;
+  const gastoCalculado = valorCombustivel;
+  const kmCalculados = kmTrabalhado;
   const precoLitroMedio = litrosCalculados > 0 ? gastoCalculado / litrosCalculados : 0;
   const consumoKmL = litrosCalculados > 0 ? kmCalculados / litrosCalculados : 0;
   
@@ -765,7 +767,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <input 
                           type="text" inputMode="decimal" 
                           value={texto_valorCombustivel} 
-                          onChange={(e) => { setTexto_valorCombustivel(e.target.value); setValorCombustivel(lerNumero(e.target.value)); }}
+                          onChange={(e) => { const valor = e.currentTarget.value; setTexto_valorCombustivel(valor); setValorCombustivel(lerNumero(valor)); }}
+                          onInput={(e) => { const valor = e.currentTarget.value; setTexto_valorCombustivel(valor); setValorCombustivel(lerNumero(valor)); }}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="0.00"
                         />
@@ -775,7 +778,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <input 
                           type="text" inputMode="decimal" 
                           value={texto_litros} 
-                          onChange={(e) => { setTexto_litros(e.target.value); setLitros(lerNumero(e.target.value)); }}
+                          onChange={(e) => { const valor = e.currentTarget.value; setTexto_litros(valor); setLitros(lerNumero(valor)); }}
+                          onInput={(e) => { const valor = e.currentTarget.value; setTexto_litros(valor); setLitros(lerNumero(valor)); }}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="0.00"
                         />
@@ -787,7 +791,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <input 
                           type="text" inputMode="decimal" 
                           value={texto_kmTrabalhado} 
-                          onChange={(e) => { setTexto_kmTrabalhado(e.target.value); setKmTrabalhado(lerNumero(e.target.value)); }}
+                          onChange={(e) => { const valor = e.currentTarget.value; setTexto_kmTrabalhado(valor); setKmTrabalhado(lerNumero(valor)); }}
+                          onInput={(e) => { const valor = e.currentTarget.value; setTexto_kmTrabalhado(valor); setKmTrabalhado(lerNumero(valor)); }}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="Ex: 150"
                         />
