@@ -74,10 +74,15 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
   // Estados para os lançamentos do dia (Turno)
   const [faturamentoBruto, setFaturamentoBruto] = useState<number>(0);
+  const [texto_faturamentoBruto, setTexto_faturamentoBruto] = useState('');
   const [litros, setLitros] = useState<number>(0);
+  const [texto_litros, setTexto_litros] = useState('');
   const [valorCombustivel, setValorCombustivel] = useState<number>(0);
+  const [texto_valorCombustivel, setTexto_valorCombustivel] = useState('');
   const [kmTrabalhado, setKmTrabalhado] = useState<number>(0);
+  const [texto_kmTrabalhado, setTexto_kmTrabalhado] = useState('');
   const [kmTotal, setKmTotal] = useState<number>(0);
+  const [texto_kmTotal, setTexto_kmTotal] = useState('');
 
   // Nomes e valores das reservas
   const [nomeReserva1, setNomeReserva1] = useState<string>('Reserva Para Fevereiro');
@@ -325,11 +330,11 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       setHistorico([novoLancamento, ...historico]);
     }
 
-    setFaturamentoBruto(0);
-    setValorCombustivel(0);
-    setLitros(0);
-    setKmTrabalhado(0);
-    setKmTotal(0);
+    setFaturamentoBruto(0); setTexto_faturamentoBruto('');
+    setValorCombustivel(0); setTexto_valorCombustivel('');
+    setLitros(0); setTexto_litros('');
+    setKmTrabalhado(0); setTexto_kmTrabalhado('');
+    setKmTotal(0); setTexto_kmTotal('');
     setValReserva1(0);
     setValReserva2(0);
   };
@@ -377,11 +382,11 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       return;
     }
     setIdEditando(item.id);
-    setFaturamentoBruto(item.faturamentoBruto);
-    setValorCombustivel(item.combustivel);
-    setLitros(item.litros || 0);
-    setKmTrabalhado(item.kmTrabalhado || 0);
-    setKmTotal(item.kmTotal || 0);
+    setFaturamentoBruto(item.faturamentoBruto); setTexto_faturamentoBruto(String(item.faturamentoBruto));
+    setValorCombustivel(item.combustivel); setTexto_valorCombustivel(String(item.combustivel));
+    setLitros(item.litros || 0); setTexto_litros(String(item.litros || 0));
+    setKmTrabalhado(item.kmTrabalhado || 0); setTexto_kmTrabalhado(String(item.kmTrabalhado || 0));
+    setKmTotal(item.kmTotal || 0); setTexto_kmTotal(String(item.kmTotal || 0));
     setValReserva1(item.reservaFevereiro || 0);
     setValReserva2(item.reservaInvestimento || 0);
     setAbaAtiva('lancamento');
@@ -703,8 +708,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                 <button 
                   onClick={() => { 
                     setIdEditando(null); 
-                    setFaturamentoBruto(0); setValorCombustivel(0); setLitros(0); 
-                    setKmTrabalhado(0); setKmTotal(0); setValReserva1(0); setValReserva2(0);
+                    setFaturamentoBruto(0); setTexto_faturamentoBruto(''); setValorCombustivel(0); setTexto_valorCombustivel(''); setLitros(0); setTexto_litros(''); 
+                    setKmTrabalhado(0); setTexto_kmTrabalhado(''); setKmTotal(0); setTexto_kmTotal(''); setValReserva1(0); setValReserva2(0);
                   }}
                   className="text-xs bg-amber-500/20 hover:bg-amber-500/30 px-4 py-2 rounded-lg font-bold transition-all"
                 >
@@ -741,8 +746,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                     <label className={`block text-sm font-medium mb-1.5 ${modoEscuro ? 'text-white/80' : 'text-slate-700'}`}>Faturamento Bruto (R$)</label>
                     <input 
                       type="text" inputMode="decimal" 
-                      value={faturamentoBruto || ''} 
-                      onChange={(e) => setFaturamentoBruto(lerNumero(e.target.value))}
+                      value={texto_faturamentoBruto} 
+                      onChange={(e) => { setTexto_faturamentoBruto(e.target.value); setFaturamentoBruto(lerNumero(e.target.value)); }}
                       className={`w-full px-4 py-3 border rounded-xl outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30 focus:border-blue-500/50' : 'border-slate-300 text-slate-800'}`}
                       placeholder="0.00"
                     />
@@ -755,8 +760,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>Valor Gasto (R$)</label>
                         <input 
                           type="text" inputMode="decimal" 
-                          value={valorCombustivel || ''} 
-                          onChange={(e) => setValorCombustivel(lerNumero(e.target.value))}
+                          value={texto_valorCombustivel} 
+                          onChange={(e) => { setTexto_valorCombustivel(e.target.value); setValorCombustivel(lerNumero(e.target.value)); }}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="0.00"
                         />
@@ -765,8 +770,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>Litros</label>
                         <input 
                           type="text" inputMode="decimal" 
-                          value={litros || ''} 
-                          onChange={(e) => setLitros(lerNumero(e.target.value))}
+                          value={texto_litros} 
+                          onChange={(e) => { setTexto_litros(e.target.value); setLitros(lerNumero(e.target.value)); }}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="0.00"
                         />
@@ -777,8 +782,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>KM Trabalhado (Líquido)</label>
                         <input 
                           type="text" inputMode="decimal" 
-                          value={kmTrabalhado || ''} 
-                          onChange={(e) => setKmTrabalhado(lerNumero(e.target.value))}
+                          value={texto_kmTrabalhado} 
+                          onChange={(e) => { setTexto_kmTrabalhado(e.target.value); setKmTrabalhado(lerNumero(e.target.value)); }}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="Ex: 150"
                         />
@@ -787,8 +792,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>KM Total do Carro</label>
                         <input 
                           type="text" inputMode="decimal" 
-                          value={kmTotal || ''} 
-                          onChange={(e) => setKmTotal(lerNumero(e.target.value))}
+                          value={texto_kmTotal} 
+                          onChange={(e) => { setTexto_kmTotal(e.target.value); setKmTotal(lerNumero(e.target.value)); }}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="Ex: 180"
                         />
