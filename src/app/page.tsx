@@ -15,6 +15,45 @@ const lerNumero = (texto: string): number => {
   return Number.isFinite(numero) && numero >= 0 ? numero : 0;
 };
 
+// Feriados nacionais brasileiros. Datas móveis calculadas a partir da Páscoa.
+// Feriados estaduais, municipais e pontos facultativos não entram nesta regra.
+function dataPascoa(ano: number): Date {
+  const a = ano % 19;
+  const b = Math.floor(ano / 100);
+  const c = ano % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const mes = Math.floor((h + l - 7 * m + 114) / 31);
+  const dia = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(ano, mes - 1, dia);
+}
+
+function diasTrabalhoNoMes(ano: number, mes: number): number {
+  const feriados = new Set([
+    '01-01', '04-21', '05-01', '09-07', '10-12',
+    '11-02', '11-15', '11-20', '12-25',
+  ]);
+  const sextaSanta = dataPascoa(ano);
+  sextaSanta.setDate(sextaSanta.getDate() - 2);
+  const totalDias = new Date(ano, mes + 1, 0).getDate();
+  let dias = 0;
+  for (let dia = 1; dia <= totalDias; dia++) {
+    const data = new Date(ano, mes, dia);
+    if (data.getDay() === 0) continue;
+    const chave = `${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+    const ehSextaSanta = data.getMonth() === sextaSanta.getMonth() && data.getDate() === sextaSanta.getDate();
+    if (!feriados.has(chave) && !ehSextaSanta) dias++;
+  }
+  return Math.max(dias, 1);
+}
+
 interface SaidaItem {
   id: string;
   nome: string;
@@ -29,7 +68,14 @@ interface CustoFixoItem {
   cor?: string;
 }
 
+interface ReservaDiariaItem {
+  id: string;
+  nome: string;
+  valor: number;
+}
+
 interface DadosPersistidos {
+  reservasDiarias?: ReservaDiariaItem[];
   custosFixos: CustoFixoItem[];
   nomeReserva1: string;
   nomeReserva2: string;
@@ -54,6 +100,7 @@ interface Lancamento {
   reservaAcidente: number;
   custosFixosDia: number; 
   detalheCustosFixosDia?: { [id: string]: number };
+  reservasDiariasDia?: ReservaDiariaItem[];
   saidas: SaidaItem[];
   totalDespesas: number;
   liquido: number;
@@ -62,6 +109,12 @@ interface Lancamento {
 function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | null }) {
   const [abaAtiva, setAbaAtiva] = useState<'lancamento' | 'relatorios'>('lancamento');
   const [modoEscuro, setModoEscuro] = useState<boolean>(true);
+  const [mesAtual, setMesAtual] = useState(() => { const agora = new Date(); return `${agora.getFullYear()}-${agora.getMonth()}`; });
+  useEffect(() => {
+    const verificarMes = () => { const agora = new Date(); setMesAtual(`${agora.getFullYear()}-${agora.getMonth()}`); };
+    const intervalo = window.setInterval(verificarMes, 60 * 60 * 1000);
+    return () => window.clearInterval(intervalo);
+  }, []);
 
   // Custos Fixos Mensais Dinâmicos com suporte a cores
   const [custosFixos, setCustosFixos] = useState<CustoFixoItem[]>([
@@ -71,6 +124,22 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     { id: '4', nome: 'Troca de Óleo', valorMensal: 300.00, cor: '#f59e0b' },
     { id: '5', nome: 'violão', valorMensal: 200.00, cor: '#ec4899' }
   ]);
+
+  // Valores padrão de cada reserva, aplicados a novos turnos.
+  const [reservasDiarias, setReservasDiarias] = useState<ReservaDiariaItem[]>([]);
+  // Ao editar um lançamento, suas reservas são independentes das configurações atuais.
+  const [reservasEdicao, setReservasEdicao] = useState<ReservaDiariaItem[] | null>(null);
+  // Força a atualização visual dos campos de reserva após salvar/cancelar.
+  const [versaoFormulario, setVersaoFormulario] = useState(0);
+  const reservasDoTurno = reservasEdicao ?? reservasDiarias;
+  const atualizarReservasTurno = (alterar: (atual: ReservaDiariaItem[]) => ReservaDiariaItem[]) => {
+    if (reservasEdicao !== null) setReservasEdicao(anteriores => alterar(anteriores ?? []));
+    else setReservasDiarias(anteriores => alterar(anteriores));
+  };
+  const adicionarReservaDiaria = () => atualizarReservasTurno(anteriores => [...anteriores, {
+    id: `reserva-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    nome: '', valor: 0
+  }]);
 
   // Estados para os lançamentos do dia (Turno)
   const [faturamentoBruto, setFaturamentoBruto] = useState<number>(0);
@@ -106,6 +175,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
   const [historico, setHistorico] = useState<Lancamento[]>([]);
   const [idEditando, setIdEditando] = useState<string | null>(null);
+  const [mensagemLancamento, setMensagemLancamento] = useState('');
   const [dadosCarregados, setDadosCarregados] = useState(false);
   const [firebasePronto, setFirebasePronto] = useState(false);
   const [statusPersistencia, setStatusPersistencia] = useState('Conectando ao armazenamento...');
@@ -114,6 +184,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
   const aplicarDados = (dados: Partial<DadosPersistidos>) => {
     if (Array.isArray(dados.custosFixos)) setCustosFixos(dados.custosFixos);
+    if (Array.isArray(dados.reservasDiarias)) setReservasDiarias(dados.reservasDiarias);
     if (typeof dados.nomeReserva1 === 'string') setNomeReserva1(dados.nomeReserva1);
     if (typeof dados.nomeReserva2 === 'string') setNomeReserva2(dados.nomeReserva2);
     if (typeof dados.nomeReserva3 === 'string') setNomeReserva3(dados.nomeReserva3);
@@ -124,6 +195,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
   const capturarDados = (): DadosPersistidos => ({
     custosFixos,
+    reservasDiarias,
     nomeReserva1,
     nomeReserva2,
     nomeReserva3,
@@ -209,7 +281,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     }, 700);
 
     return () => window.clearTimeout(temporizador);
-  }, [custosFixos, nomeReserva1, nomeReserva2, nomeReserva3, lembrete, historico, modoEscuro, dadosCarregados, firebasePronto, uid]);
+  }, [custosFixos, reservasDiarias, nomeReserva1, nomeReserva2, nomeReserva3, lembrete, historico, modoEscuro, dadosCarregados, firebasePronto, uid]);
 
   const infoDataAtual = useMemo(() => {
     const hoje = new Date();
@@ -224,19 +296,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     const hoje = new Date();
     const ano = hoje.getFullYear();
     const mes = hoje.getMonth();
-    const ultimoDia = new Date(ano, mes + 1, 0).getDate();
-    
-    let totalDiasUteisMes = 0;
-    for (let dia = 1; dia <= ultimoDia; dia++) {
-      const dataAtual = new Date(ano, mes, dia);
-      if (dataAtual.getDay() !== 0) {
-        totalDiasUteisMes++;
-      }
-    }
-
-    // O custo mensal é distribuído pelos dias de trabalho previstos no mês inteiro.
-    // Não subtraímos dias já registrados: isso faria o custo por dia aumentar ao longo do mês.
-    const diasRestantes = Math.max(totalDiasUteisMes, 1);
+    // Dias de segunda a sábado, descontando feriados nacionais.
+    const diasRestantes = diasTrabalhoNoMes(ano, mes);
 
     let somaDiaria = 0;
     const porItem: { [id: string]: number } = {};
@@ -252,21 +313,22 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       custoFixoDiarioPorItem: porItem,
       totalCustoFixoDiario: somaDiaria
     };
-  }, [custosFixos, historico]);
+  }, [custosFixos, mesAtual]);
 
   const handleAdicionarCustoFixo = () => {
-    setCustosFixos([...custosFixos, { id: Date.now().toString(), nome: '', valorMensal: 0, cor: '#64748b' }]);
+    setCustosFixos(anteriores => [...anteriores, { id: Date.now().toString(), nome: '', valorMensal: 0, cor: '#64748b' }]);
   };
 
   const handleRemoverCustoFixo = (id: string) => {
-    setCustosFixos(custosFixos.filter(c => c.id !== id));
+    setCustosFixos(anteriores => anteriores.filter(c => c.id !== id));
   };
 
   const handleAtualizarCustoFixo = (id: string, campo: 'nome' | 'valorMensal' | 'cor', valor: string | number) => {
-    setCustosFixos(custosFixos.map(c => c.id === id ? { ...c, [campo]: valor } : c));
+    setCustosFixos(anteriores => anteriores.map(c => c.id === id ? { ...c, [campo]: valor } : c));
   };
 
-  const totalReservasTurno = valReservaAcidente;
+  const totalReservasDiarias = reservasDoTurno.reduce((soma, reserva) => soma + (Number(reserva.valor) || 0), 0);
+  const totalReservasTurno = valReservaAcidente + totalReservasDiarias;
 
   // O painel usa os valores visíveis digitados, inclusive quando há vírgula decimal.
   // Os valores numéricos são a fonte de verdade para os cálculos do turno.
@@ -285,6 +347,17 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
   const saldoLiquidoDia = faturamentoBruto - totalDespesasDia;
 
   const handleSalvarDia = () => {
+    setMensagemLancamento('');
+    if (idEditando && !historico.some(item => item.id === idEditando && item.tipo === 'turno')) {
+      alert('O lançamento selecionado não foi encontrado. Nenhuma alteração foi salva.');
+      return;
+    }
+    if (!idEditando) {
+      const hoje = new Date().toLocaleDateString('pt-BR');
+      const jaExisteTurnoHoje = historico.some(item => item.tipo === 'turno' && item.data === hoje);
+      if (jaExisteTurnoHoje && !window.confirm('Já existe um turno registrado para hoje.\n\nPara corrigir um lançamento, clique na linha dele no histórico e use “Salvar Alterações”.\n\nDeseja realmente adicionar OUTRO turno para a mesma data?')) return;
+      if (faturamentoBruto === 0 && valorCombustivel === 0 && kmTrabalhado === 0 && kmTotal === 0 && litros === 0 && totalReservasDiarias > 0 && !window.confirm('Este turno contém apenas reservas diárias, sem faturamento, combustível ou quilometragem. Deseja registrá-lo mesmo assim?')) return;
+    }
     if (faturamentoBruto === 0 && valorCombustivel === 0 && totalReservasTurno === 0) {
       alert('Preencha ao menos o faturamento, combustível ou reservas antes de salvar o dia de trabalho.');
       return;
@@ -293,9 +366,10 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     const totalDespesasSalvar = valorCombustivel + totalReservasTurno + totalCustoFixoDiario;
     const liquidoSalvar = faturamentoBruto - totalDespesasSalvar;
     const detalheFixosSnapshot = { ...custoFixoDiarioPorItem };
+    const reservasSnapshot = reservasDoTurno.map(r => ({ ...r }));
 
     if (idEditando) {
-      setHistorico(historico.map(item => item.id === idEditando ? {
+      setHistorico(anteriores => anteriores.map(item => item.id === idEditando ? {
         ...item,
         tipo: 'turno',
         faturamentoBruto,
@@ -308,11 +382,13 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         reservaAcidente: valReservaAcidente,
         custosFixosDia: totalCustoFixoDiario,
         detalheCustosFixosDia: detalheFixosSnapshot,
+        reservasDiariasDia: reservasSnapshot,
         saidas: [],
         totalDespesas: totalDespesasSalvar,
         liquido: liquidoSalvar,
       } : item));
       setIdEditando(null);
+      setMensagemLancamento('Alterações salvas no lançamento original. Nenhum novo turno foi criado.');
     } else {
       const novoLancamento: Lancamento = {
         id: Date.now().toString(),
@@ -329,11 +405,13 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         reservaAcidente: valReservaAcidente,
         custosFixosDia: totalCustoFixoDiario,
         detalheCustosFixosDia: detalheFixosSnapshot,
+        reservasDiariasDia: reservasSnapshot,
         saidas: [],
         totalDespesas: totalDespesasSalvar,
         liquido: liquidoSalvar,
       };
-      setHistorico([novoLancamento, ...historico]);
+      setHistorico(anteriores => [novoLancamento, ...anteriores]);
+      setMensagemLancamento('Novo turno registrado no histórico.');
     }
 
     setFaturamentoBruto(0); setTexto_faturamentoBruto('');
@@ -343,6 +421,10 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     setKmTotal(0); setTexto_kmTotal('');
     setValReserva1(0);
     setValReserva2(0);
+    // Mantém os nomes das caixinhas, mas não reaproveita o valor do turno anterior.
+    setReservasDiarias(anteriores => anteriores.map(reserva => ({ ...reserva, valor: 0 })));
+    setReservasEdicao(null);
+    setVersaoFormulario(anterior => anterior + 1);
   };
 
   const handleRegistarAvulso = () => {
@@ -387,6 +469,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       alert('Apenas registos de turnos de trabalho completos são carregados para edição.');
       return;
     }
+    setMensagemLancamento('');
     setIdEditando(item.id);
     setFaturamentoBruto(item.faturamentoBruto); setTexto_faturamentoBruto(String(item.faturamentoBruto));
     setValorCombustivel(item.combustivel); setTexto_valorCombustivel(String(item.combustivel));
@@ -395,8 +478,34 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     setKmTotal(item.kmTotal || 0); setTexto_kmTotal(String(item.kmTotal || 0));
     setValReserva1(item.reservaFevereiro || 0);
     setValReserva2(item.reservaInvestimento || 0);
+    setReservasEdicao((item.reservasDiariasDia || []).map(r => ({ ...r })));
     setAbaAtiva('lancamento');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Exclui somente o turno escolhido, após confirmação explícita.
+  const handleExcluirTurno = (item: Lancamento) => {
+    if (item.tipo !== 'turno') return;
+    const valor = item.liquido.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const confirmar = window.confirm(
+      `Excluir definitivamente este turno?\n\nData: ${item.data}\nResultado líquido: ${valor}\n\nEsta ação não poderá ser desfeita. Os relatórios serão recalculados.`
+    );
+    if (!confirmar) return;
+
+    setHistorico(anteriores => anteriores.filter(lancamento => lancamento.id !== item.id));
+    if (idEditando === item.id) {
+      setIdEditando(null);
+      setFaturamentoBruto(0); setTexto_faturamentoBruto('');
+      setValorCombustivel(0); setTexto_valorCombustivel('');
+      setLitros(0); setTexto_litros('');
+      setKmTrabalhado(0); setTexto_kmTrabalhado('');
+      setKmTotal(0); setTexto_kmTotal('');
+      setValReserva1(0); setValReserva2(0);
+      setReservasEdicao(null);
+      setReservasDiarias(anteriores => anteriores.map(reserva => ({ ...reserva, valor: 0 })));
+      setVersaoFormulario(anterior => anterior + 1);
+    }
+    setMensagemLancamento(`Turno de ${item.data} excluído. Histórico e relatórios atualizados.`);
   };
 
   // --- CÁLCULOS DE RELATÓRIOS E ACUMULADOS ---
@@ -411,6 +520,13 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     let totalRes1Geral = 0;
     let totalRes2Geral = 0;
     let totalResAcidenteGeral = 0;
+
+    // Reservas diárias são somadas a partir dos turnos efetivamente salvos.
+    // Mantemos o nome gravado no lançamento para preservar o histórico.
+    const acumuladoReservasDiarias: Record<string, { nome: string; total: number }> = {};
+    reservasDiarias.forEach(r => {
+      acumuladoReservasDiarias[r.id] = { nome: r.nome || 'Reserva sem nome', total: 0 };
+    });
 
     const acumuladoCustosFixos: { [id: string]: number } = {};
     custosFixos.forEach(c => { acumuladoCustosFixos[c.id] = 0; });
@@ -427,6 +543,18 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       totalKmTrabGeral += (item.kmTrabalhado || 0);
       totalKmTotalGeral += (item.kmTotal || 0);
       
+      // Cada reserva é contabilizada uma única vez por lançamento salvo.
+      // Editar/excluir um turno recalcula automaticamente os acumulados.
+      if (item.tipo === 'turno') {
+        (item.reservasDiariasDia || []).forEach(r => {
+          const chave = r.id || `nome:${r.nome}`;
+          if (!acumuladoReservasDiarias[chave]) {
+            acumuladoReservasDiarias[chave] = { nome: r.nome || 'Reserva sem nome', total: 0 };
+          }
+          acumuladoReservasDiarias[chave].total += Number(r.valor) || 0;
+        });
+      }
+
       // Soma inicial das reservas do turno
       totalRes1Geral += (item.reservaFevereiro || 0);
       totalRes2Geral += (item.reservaInvestimento || 0);
@@ -517,13 +645,14 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       totalRes2Geral,
       totalResAcidenteGeral,
       acumuladoCustosFixos,
+      acumuladoReservasDiarias,
       porMes,
       porAno,
       totalDiasRegistrados: historico.length,
       totalDiasTrabalho,
       historicoAvulso
     };
-  }, [historico, custosFixos]);
+  }, [historico, custosFixos, reservasDiarias]);
 
   return (
     <main className={`min-h-screen p-6 md:p-8 transition-colors duration-200 ${modoEscuro ? 'bg-black text-slate-100' : 'bg-slate-100 text-slate-800'}`}>
@@ -628,7 +757,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <input 
                           type="number" 
                           value={c.valorMensal || ''} 
-                          onChange={(e) => handleAtualizarCustoFixo(c.id, 'valorMensal', parseFloat(e.target.value) || 0)}
+                          onChange={(e) => handleAtualizarCustoFixo(c.id, 'valorMensal', lerNumero(e.target.value))}
                           className={`w-full px-3 py-2 text-sm border rounded-lg font-semibold outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30 focus:border-blue-500/50' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="0.00"
                         />
@@ -710,12 +839,14 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
             {idEditando && (
               <div className="mb-6 bg-amber-500/10 border border-amber-500/20 backdrop-blur-sm p-4 rounded-xl flex justify-between items-center text-amber-400">
-                <span className="font-medium text-sm">⚠️ A editar um registo do histórico. Altere os dados abaixo e clique em Atualizar.</span>
+                <span className="font-medium text-sm">✏️ MODO EDIÇÃO ATIVO: você está alterando um turno existente. Use “Salvar Alterações” para atualizar a mesma linha do histórico.</span>
                 <button 
                   onClick={() => { 
                     setIdEditando(null); 
                     setFaturamentoBruto(0); setTexto_faturamentoBruto(''); setValorCombustivel(0); setTexto_valorCombustivel(''); setLitros(0); setTexto_litros(''); 
-                    setKmTrabalhado(0); setTexto_kmTrabalhado(''); setKmTotal(0); setTexto_kmTotal(''); setValReserva1(0); setValReserva2(0);
+                    setKmTrabalhado(0); setTexto_kmTrabalhado(''); setKmTotal(0); setTexto_kmTotal(''); setValReserva1(0); setValReserva2(0); setReservasEdicao(null);
+                    setReservasDiarias(anteriores => anteriores.map(reserva => ({ ...reserva, valor: 0 })));
+                    setVersaoFormulario(anterior => anterior + 1);
                   }}
                   className="text-xs bg-amber-500/20 hover:bg-amber-500/30 px-4 py-2 rounded-lg font-bold transition-all"
                 >
@@ -824,6 +955,48 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                     </div>
                   </div>
 
+                  {/* RESERVAS DIÁRIAS: valores diretos, sem rateio mensal */}
+                  <div className={`p-5 rounded-xl border space-y-4 ${modoEscuro ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h3 className={`text-sm font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>💰 Reservas Diárias</h3>
+                        <p className={`text-xs mt-1 ${modoEscuro ? 'text-white/50' : 'text-slate-500'}`}>
+                          Valor direto por turno, sem divisão por dias do mês.
+                          {reservasEdicao !== null ? ' Você está editando as reservas deste lançamento.' : ' Os nomes permanecem, e os valores zeram após salvar o turno.'}
+                        </p>
+                      </div>
+                      <button type="button" onClick={adicionarReservaDiaria} className="rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2">
+                        ＋ Adicionar Reserva
+                      </button>
+                    </div>
+                    {reservasDoTurno.length === 0 ? (
+                      <p className={`text-xs ${modoEscuro ? 'text-white/50' : 'text-slate-500'}`}>Nenhuma reserva diária adicionada.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {reservasDoTurno.map(reserva => (
+                          <div key={reserva.id} className={`grid grid-cols-1 sm:grid-cols-[1fr_130px_auto] gap-3 items-end rounded-xl p-3 border ${modoEscuro ? 'border-white/10' : 'border-slate-200'}`}>
+                            <label className="text-xs">Nome da reserva
+                              <input type="text" value={reserva.nome} placeholder="Ex.: Reserva para Janeiro"
+                                onChange={e => atualizarReservasTurno(lista => lista.map(r => r.id === reserva.id ? { ...r, nome: e.target.value } : r))}
+                                className={`block w-full mt-1 p-2.5 rounded-lg border ${modoEscuro ? 'bg-black/50 border-white/10 text-white' : 'bg-white border-slate-300'}`} />
+                            </label>
+                            <label className="text-xs">Valor diário (R$)
+                              <input key={`${idEditando || 'novo'}-${reserva.id}-${versaoFormulario}`} type="text" inputMode="decimal" defaultValue={String(reserva.valor).replace('.', ',')} placeholder="0,00"
+                                onChange={e => atualizarReservasTurno(lista => lista.map(r => r.id === reserva.id ? { ...r, valor: lerNumero(e.target.value) } : r))}
+                                className={`block w-full mt-1 p-2.5 rounded-lg border ${modoEscuro ? 'bg-black/50 border-white/10 text-white' : 'bg-white border-slate-300'}`} />
+                            </label>
+                            <button type="button" title="Excluir reserva" aria-label={`Excluir ${reserva.nome || 'reserva'}`}
+                              onClick={() => atualizarReservasTurno(lista => lista.filter(r => r.id !== reserva.id))}
+                              className="text-rose-400 hover:text-rose-300 px-3 py-2.5 font-bold">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className={`text-sm font-semibold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>
+                      Total das reservas diárias: {totalReservasDiarias.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                  </div>
+
                   <div className="max-w-sm mx-auto w-full text-center">
                     <label className={`block text-sm font-semibold mb-2 ${modoEscuro ? 'text-white/80' : 'text-slate-700'}`}>Reserva de Acidente</label>
                     <div aria-live="polite" className={`w-full px-4 py-3 rounded-lg border font-bold ${modoEscuro ? 'bg-black/50 border-white/10 text-white' : 'bg-slate-100 border-slate-200 text-slate-800'}`}>
@@ -836,8 +1009,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                     onClick={handleSalvarDia}
                     className={`w-full font-bold py-3.5 rounded-xl transition-all hover:scale-[1.01] shadow-lg text-white ${idEditando ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-500/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20'}`}
                   >
-                    {idEditando ? '🔄 Atualizar Registo' : '💾 Registar e Salvar Dia de Trabalho'}
+                    {idEditando ? '💾 Salvar Alterações no Turno Selecionado' : '➕ Adicionar Novo Dia / Turno'}
                   </button>
+                  {mensagemLancamento && <p role="status" className="text-sm text-emerald-400 font-semibold mt-3">{mensagemLancamento}</p>}
                 </div>
               </div>
 
@@ -845,33 +1019,34 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                 <div className={`p-6 rounded-2xl shadow-lg border transition-all duration-300 ${modoEscuro ? 'bg-white/5 backdrop-blur-lg border-white/10' : 'bg-white border-slate-200'}`}>
                   <h2 className={`text-lg font-bold mb-2 ${modoEscuro ? 'text-white/90' : 'text-slate-800'}`}>Detalhamento dos Custos (Rateio Diário)</h2>
                   <p className={`text-xs mb-5 ${modoEscuro ? 'text-white/50' : 'text-slate-500'}`}>
-                    {temMovimentoNoTurno ? `Calculado com base em ${diasUteisMes} dias restantes.` : 'Insira dados no turno para exibir o rateio.'}
+                    {`Rateio mensal por ${diasUteisMes} dias de trabalho (segunda a sábado, sem domingos e feriados nacionais).`}
                   </p>
                   
                   <div className={`space-y-3 text-sm ${modoEscuro ? 'divide-white/10' : 'divide-slate-100'}`}>
                     <div className={`flex justify-between py-2.5 border-b ${modoEscuro ? 'border-white/10' : 'border-slate-100'}`}>
                       <span className={modoEscuro ? 'text-white/70' : 'text-slate-600'}>Combustível:</span>
-                      <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>R$ {valorCombustivel.toFixed(2)}</span>
-                    </div>
-                    <div className={`flex justify-between py-2.5 border-b ${modoEscuro ? 'border-white/10' : 'border-slate-100'}`}>
-                      <span className={modoEscuro ? 'text-white/70' : 'text-slate-600'}>{nomeReserva1}:</span>
-                      <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>R$ {(Number(valReserva1) || 0).toFixed(2)}</span>
-                    </div>
-                    <div className={`flex justify-between py-2.5 border-b ${modoEscuro ? 'border-white/10' : 'border-slate-100'}`}>
-                      <span className={modoEscuro ? 'text-white/70' : 'text-slate-600'}>{nomeReserva2}:</span>
-                      <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>R$ {(Number(valReserva2) || 0).toFixed(2)}</span>
+                      <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>{valorCombustivel.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                     </div>
                     <div className={`flex justify-between py-2.5 border-b ${modoEscuro ? 'border-white/10' : 'border-slate-100'}`}>
                       <span className={modoEscuro ? 'text-white/70' : 'text-slate-600'}>{nomeReserva3} (R$ 0,038/KM):</span>
-                      <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>R$ {valReservaAcidente.toFixed(2)}</span>
+                      <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>{valReservaAcidente.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                     </div>
+
+                    {reservasDoTurno.map(reserva => (
+                      <div key={reserva.id} className={`flex justify-between gap-3 py-2.5 border-b ${modoEscuro ? 'border-white/10' : 'border-slate-100'}`}>
+                        <span className={modoEscuro ? 'text-white/70' : 'text-slate-600'}>{reserva.nome || 'Reserva sem nome'} (Diária):</span>
+                        <span className={`font-bold whitespace-nowrap ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>
+                          {reserva.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                      </div>
+                    ))}
 
                     {custosFixos.map((c) => {
                       const valorDiarioItem = custoFixoDiarioPorItem[c.id] || 0;
                       return (
                         <div key={c.id} className={`flex justify-between py-2.5 border-b ${modoEscuro ? 'border-white/10' : 'border-slate-100'}`}>
                           <span className={modoEscuro ? 'text-white/70' : 'text-slate-600'}>{c.nome || 'Custo sem nome'} (Rateio):</span>
-                          <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>R$ {valorDiarioItem.toFixed(2)}</span>
+                          <span className={`font-bold ${modoEscuro ? 'text-white' : 'text-slate-800'}`}>{valorDiarioItem.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                         </div>
                       );
                     })}
@@ -907,10 +1082,10 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <th className="p-4 font-semibold">Tipo / Dia</th>
                         <th className="p-4 font-semibold">Faturamento</th>
                         <th className="p-4 font-semibold">Combustível</th>
-                        <th className="p-4 font-semibold">{nomeReserva1}</th>
-                        <th className="p-4 font-semibold">{nomeReserva2}</th>
+                        <th className="p-4 font-semibold">Reservas Diárias</th>
                         <th className="p-4 font-semibold">{nomeReserva3}</th>
                         <th className="p-4 font-semibold">Total Líquido</th>
+                        <th className="p-4 font-semibold text-center">Ações</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -918,7 +1093,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                         <tr 
                           key={item.id} 
                           onClick={() => item.tipo === 'turno' && handleCarregarParaEdicao(item)}
-                          className={`border-b transition-colors ${item.tipo === 'turno' ? (modoEscuro ? 'border-white/5 hover:bg-white/5 cursor-pointer' : 'border-slate-100 hover:bg-blue-50 cursor-pointer') : (modoEscuro ? 'border-white/5 bg-black/30' : 'border-slate-100 bg-slate-50/50')} ${item.tipo !== 'turno' ? 'opacity-85' : ''}`}
+                          className={`border-b transition-colors ${item.tipo === 'turno' ? (modoEscuro ? 'border-white/5 hover:bg-white/5 cursor-pointer' : 'border-slate-100 hover:bg-blue-50 cursor-pointer') : (modoEscuro ? 'border-white/5 bg-black/30' : 'border-slate-100 bg-slate-50/50')} ${item.tipo !== 'turno' ? 'opacity-85' : ''} ${idEditando === item.id ? 'ring-2 ring-amber-400/70 bg-amber-500/10' : ''}`}
                         >
                           <td className={`p-4 font-medium ${modoEscuro ? 'text-white/90' : 'text-slate-700'}`}>{item.data}</td>
                           <td className={`p-4 capitalize ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>
@@ -932,11 +1107,30 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                           </td>
                           <td className="p-4 text-emerald-400 font-bold">R$ {item.faturamentoBruto.toFixed(2)}</td>
                           <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {item.combustivel.toFixed(2)}</td>
-                          <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {item.reservaFevereiro.toFixed(2)}</td>
-                          <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {item.reservaInvestimento.toFixed(2)}</td>
+                          <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>
+                            {(item.reservasDiariasDia || []).map(r => (
+                              <div key={r.id} className="whitespace-nowrap">{r.nome || 'Reserva'}: {r.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
+                            ))}
+                            {(item.reservaFevereiro || 0) > 0 && <div>Reserva antiga 1: R$ {item.reservaFevereiro.toFixed(2)}</div>}
+                            {(item.reservaInvestimento || 0) > 0 && <div>Reserva antiga 2: R$ {item.reservaInvestimento.toFixed(2)}</div>}
+                            {!item.reservasDiariasDia?.length && !item.reservaFevereiro && !item.reservaInvestimento && '—'}
+                          </td>
                           <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {item.reservaAcidente.toFixed(2)}</td>
                           <td className={`p-4 font-bold ${item.liquido >= 0 ? (modoEscuro ? 'text-blue-400' : 'text-blue-500') : 'text-rose-400'}`}>
                             R$ {item.liquido.toFixed(2)}
+                          </td>
+                          <td className="p-4 text-center">
+                            {item.tipo === 'turno' && (
+                              <button
+                                type="button"
+                                onClick={(evento) => { evento.stopPropagation(); handleExcluirTurno(item); }}
+                                className="px-3 py-2 rounded-lg text-xs font-semibold text-rose-400 border border-rose-500/30 hover:bg-rose-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
+                                title={`Excluir turno de ${item.data}`}
+                                aria-label={`Excluir turno de ${item.data}, líquido ${item.liquido.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`}
+                              >
+                                🗑️ Excluir
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -983,15 +1177,18 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                     <strong className={`text-sm ${modoEscuro ? 'text-white/90' : 'text-slate-800'}`}>R$ {relatoriosAcumulados.totalCombGeral.toFixed(2)}</strong>
                   </div>
 
-                  <div className={`p-4 rounded-xl border transition-all ${modoEscuro ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'}`} style={{ borderLeftWidth: '5px', borderLeftColor: '#06b6d4' }}>
-                    <span className={`text-xs block mb-1 ${modoEscuro ? 'text-white/60' : 'text-slate-500'}`}>{nomeReserva1}</span>
-                    <strong className={`text-sm ${modoEscuro ? 'text-white/90' : 'text-slate-800'}`}>R$ {relatoriosAcumulados.totalRes1Geral.toFixed(2)}</strong>
-                  </div>
-
-                  <div className={`p-4 rounded-xl border transition-all ${modoEscuro ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'}`} style={{ borderLeftWidth: '5px', borderLeftColor: '#84cc16' }}>
-                    <span className={`text-xs block mb-1 ${modoEscuro ? 'text-white/60' : 'text-slate-500'}`}>{nomeReserva2}</span>
-                    <strong className={`text-sm ${modoEscuro ? 'text-white/90' : 'text-slate-800'}`}>R$ {relatoriosAcumulados.totalRes2Geral.toFixed(2)}</strong>
-                  </div>
+                  {Object.entries(relatoriosAcumulados.acumuladoReservasDiarias).map(([id, reserva], indice) => (
+                    <div
+                      key={id}
+                      className={`p-4 rounded-xl border transition-all ${modoEscuro ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'}`}
+                      style={{ borderLeftWidth: '5px', borderLeftColor: indice % 2 === 0 ? '#06b6d4' : '#84cc16' }}
+                    >
+                      <span className={`text-xs block mb-1 ${modoEscuro ? 'text-white/60' : 'text-slate-500'}`}>{reserva.nome}</span>
+                      <strong className={`text-sm ${modoEscuro ? 'text-white/90' : 'text-slate-800'}`}>
+                        R$ {reserva.total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+                  ))}
 
                   <div className={`p-4 rounded-xl border transition-all ${modoEscuro ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'}`} style={{ borderLeftWidth: '5px', borderLeftColor: '#ef4444' }}>
                     <span className={`text-xs block mb-1 ${modoEscuro ? 'text-white/60' : 'text-slate-500'}`}>{nomeReserva3}</span>
