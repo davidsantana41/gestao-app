@@ -818,7 +818,6 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                       </div>
                     </div>
                   </div>
-                  </div>
 
                   <div className="max-w-sm mx-auto w-full text-center">
                     <label className={`block text-sm font-semibold mb-2 ${modoEscuro ? 'text-white/80' : 'text-slate-700'}`}>Reserva de Acidente</label>
