@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import AuthGate from '@/components/AuthGate';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 
@@ -92,11 +93,13 @@ export default function Home() {
   const [historico, setHistorico] = useState<Lancamento[]>([]);
   const [idEditando, setIdEditando] = useState<string | null>(null);
   const [uid, setUid] = useState<string | null>(null);
+  const [authCarregada, setAuthCarregada] = useState(false);
+  const [usuarioEmail, setUsuarioEmail] = useState<string | null>(null);
   const [dadosCarregados, setDadosCarregados] = useState(false);
   const [firebasePronto, setFirebasePronto] = useState(false);
   const [statusPersistencia, setStatusPersistencia] = useState('Conectando ao armazenamento...');
 
-  const STORAGE_KEY = 'gestao-app-dados-v1';
+  const STORAGE_KEY = uid ? `gestao-app-dados-v2-${uid}` : '';
 
   const aplicarDados = (dados: Partial<DadosPersistidos>) => {
     if (Array.isArray(dados.custosFixos)) setCustosFixos(dados.custosFixos);
@@ -118,35 +121,15 @@ export default function Home() {
     modoEscuro,
   });
 
-  // Cria uma identidade anônima persistente no navegador para separar os dados de cada instalação.
+  // Aguarda a sessão. Não cria novos usuários anônimos automaticamente.
   useEffect(() => {
-    let ativo = true;
-    let criandoUsuario = false;
-
-    const unsubscribe = onAuthStateChanged(auth, async (usuario) => {
-      if (!ativo) return;
-      if (usuario) {
-        setUid(usuario.uid);
-        return;
-      }
-      if (criandoUsuario) return;
-      criandoUsuario = true;
-      try {
-        const credencial = await signInAnonymously(auth);
-        if (ativo) setUid(credencial.user.uid);
-      } catch (erro) {
-        console.error('Falha na autenticação anônima do Firebase:', erro);
-        if (ativo) {
-          setStatusPersistencia('Salvamento local ativo; sincronização na nuvem indisponível.');
-          setDadosCarregados(true);
-        }
-      }
+    return onAuthStateChanged(auth, (usuario) => {
+      setUid(usuario && !usuario.isAnonymous ? usuario.uid : null);
+      setUsuarioEmail(usuario && !usuario.isAnonymous ? usuario.email : null);
+      setAuthCarregada(true);
+      setFirebasePronto(false);
+      setDadosCarregados(false);
     });
-
-    return () => {
-      ativo = false;
-      unsubscribe();
-    };
   }, []);
 
   // Recupera a cópia da nuvem; na primeira utilização, migra os dados locais para o Firestore.
@@ -203,11 +186,11 @@ export default function Home() {
 
   // Mantém um backup no navegador e sincroniza alterações com o Firestore.
   useEffect(() => {
-    if (!dadosCarregados) return;
+    if (!dadosCarregados || !uid) return;
 
     const dados = capturarDados();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(dados));
+      if (STORAGE_KEY) localStorage.setItem(STORAGE_KEY, JSON.stringify(dados));
     } catch (erro) {
       console.error('Não foi possível salvar os dados neste navegador:', erro);
     }
@@ -536,10 +519,14 @@ export default function Home() {
     };
   }, [historico, custosFixos]);
 
+  if (!authCarregada) return <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">Verificando acesso...</div>;
+  if (!uid) return <AuthGate />;
+
   return (
     <main className={`min-h-screen p-6 md:p-8 transition-colors duration-200 ${modoEscuro ? 'bg-black text-slate-100' : 'bg-slate-100 text-slate-800'}`}>
       <div className="max-w-6xl mx-auto">
         
+        <div className="flex justify-end items-center gap-3 mb-3 text-xs text-slate-400"><span>{usuarioEmail}</span><button type="button" onClick={() => signOut(auth)} className="rounded-lg bg-slate-800 px-3 py-2 text-white hover:bg-slate-700">Sair</button></div>
         {/* Cabeçalho */}
         <header className={`mb-6 flex flex-col md:flex-row justify-between items-center p-6 rounded-2xl shadow-lg border gap-4 transition-all duration-300 ${modoEscuro ? 'bg-white/5 backdrop-blur-lg border-white/10' : 'bg-white border-slate-200'}`}>
           <div>
