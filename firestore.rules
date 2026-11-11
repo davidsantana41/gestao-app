@@ -1,0 +1,26 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Cada instalação autenticada só pode acessar seu próprio documento.
+    match /users/{userId}/appData/main {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+          'custosFixos',
+          'nomeReserva1',
+          'nomeReserva2',
+          'nomeReserva3',
+          'lembrete',
+          'historico',
+          'modoEscuro'
+        ]);
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
