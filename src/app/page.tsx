@@ -50,7 +50,7 @@ interface Lancamento {
   liquido: number;
 }
 
-export default function Home() {
+function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | null }) {
   const [abaAtiva, setAbaAtiva] = useState<'lancamento' | 'relatorios'>('lancamento');
   const [modoEscuro, setModoEscuro] = useState<boolean>(true);
 
@@ -92,9 +92,6 @@ export default function Home() {
 
   const [historico, setHistorico] = useState<Lancamento[]>([]);
   const [idEditando, setIdEditando] = useState<string | null>(null);
-  const [uid, setUid] = useState<string | null>(null);
-  const [authCarregada, setAuthCarregada] = useState(false);
-  const [usuarioEmail, setUsuarioEmail] = useState<string | null>(null);
   const [dadosCarregados, setDadosCarregados] = useState(false);
   const [firebasePronto, setFirebasePronto] = useState(false);
   const [statusPersistencia, setStatusPersistencia] = useState('Conectando ao armazenamento...');
@@ -120,17 +117,6 @@ export default function Home() {
     historico,
     modoEscuro,
   });
-
-  // Aguarda a sessão. Não cria novos usuários anônimos automaticamente.
-  useEffect(() => {
-    return onAuthStateChanged(auth, (usuario) => {
-      setUid(usuario && !usuario.isAnonymous ? usuario.uid : null);
-      setUsuarioEmail(usuario && !usuario.isAnonymous ? usuario.email : null);
-      setAuthCarregada(true);
-      setFirebasePronto(false);
-      setDadosCarregados(false);
-    });
-  }, []);
 
   // Recupera a cópia da nuvem; na primeira utilização, migra os dados locais para o Firestore.
   useEffect(() => {
@@ -518,9 +504,6 @@ export default function Home() {
       historicoAvulso
     };
   }, [historico, custosFixos]);
-
-  if (!authCarregada) return <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">Verificando acesso...</div>;
-  if (!uid) return <AuthGate />;
 
   return (
     <main className={`min-h-screen p-6 md:p-8 transition-colors duration-200 ${modoEscuro ? 'bg-black text-slate-100' : 'bg-slate-100 text-slate-800'}`}>
@@ -1201,4 +1184,16 @@ export default function Home() {
       </div>
     </main>
   );
+}
+
+export default function Home() {
+  const [usuario, setUsuario] = useState<{ uid: string; email: string | null } | null>(null);
+  const [carregando, setCarregando] = useState(true);
+  useEffect(() => onAuthStateChanged(auth, (atual) => {
+    setUsuario(atual && !atual.isAnonymous ? { uid: atual.uid, email: atual.email } : null);
+    setCarregando(false);
+  }), []);
+  if (carregando) return <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">Verificando acesso...</div>;
+  if (!usuario) return <AuthGate />;
+  return <Dashboard key={usuario.uid} uid={usuario.uid} usuarioEmail={usuario.email} />;
 }
