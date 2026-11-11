@@ -6,6 +6,15 @@ import AuthGate from '@/components/AuthGate';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 
+// Aceita valores brasileiros com vírgula decimal (ex.: 100,87 e 28,5).
+const lerNumero = (texto: string): number => {
+  const limpo = texto.trim().replace(/\\s/g, '');
+  if (!limpo) return 0;
+  const normalizado = limpo.includes(',') ? limpo.replace(/\\./g, '').replace(',', '.') : limpo;
+  const numero = Number(normalizado);
+  return Number.isFinite(numero) && numero >= 0 ? numero : 0;
+};
+
 interface SaidaItem {
   id: string;
   nome: string;
@@ -252,7 +261,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     setCustosFixos(custosFixos.map(c => c.id === id ? { ...c, [campo]: valor } : c));
   };
 
-  const totalReservasTurno = (Number(valReserva1) || 0) + (Number(valReserva2) || 0) + valReservaAcidente;
+  const totalReservasTurno = valReservaAcidente;
 
   const precoLitroMedio = litros > 0 ? valorCombustivel / litros : 0;
   const consumoKmL = litros > 0 ? kmTrabalhado / litros : 0;
@@ -283,8 +292,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         litros,
         kmTrabalhado,
         kmTotal,
-        reservaFevereiro: Number(valReserva1) || 0,
-        reservaInvestimento: Number(valReserva2) || 0,
+        reservaFevereiro: 0,
+        reservaInvestimento: 0,
         reservaAcidente: valReservaAcidente,
         custosFixosDia: totalCustoFixoDiario,
         detalheCustosFixosDia: detalheFixosSnapshot,
@@ -304,8 +313,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         litros,
         kmTrabalhado,
         kmTotal,
-        reservaFevereiro: Number(valReserva1) || 0,
-        reservaInvestimento: Number(valReserva2) || 0,
+        reservaFevereiro: 0,
+        reservaInvestimento: 0,
         reservaAcidente: valReservaAcidente,
         custosFixosDia: totalCustoFixoDiario,
         detalheCustosFixosDia: detalheFixosSnapshot,
@@ -731,9 +740,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                   <div>
                     <label className={`block text-sm font-medium mb-1.5 ${modoEscuro ? 'text-white/80' : 'text-slate-700'}`}>Faturamento Bruto (R$)</label>
                     <input 
-                      type="number" 
+                      type="text" inputMode="decimal" 
                       value={faturamentoBruto || ''} 
-                      onChange={(e) => setFaturamentoBruto(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => setFaturamentoBruto(lerNumero(e.target.value))}
                       className={`w-full px-4 py-3 border rounded-xl outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30 focus:border-blue-500/50' : 'border-slate-300 text-slate-800'}`}
                       placeholder="0.00"
                     />
@@ -745,9 +754,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                       <div>
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>Valor Gasto (R$)</label>
                         <input 
-                          type="number" 
+                          type="text" inputMode="decimal" 
                           value={valorCombustivel || ''} 
-                          onChange={(e) => setValorCombustivel(parseFloat(e.target.value) || 0)}
+                          onChange={(e) => setValorCombustivel(lerNumero(e.target.value))}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="0.00"
                         />
@@ -755,9 +764,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                       <div>
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>Litros</label>
                         <input 
-                          type="number" 
+                          type="text" inputMode="decimal" 
                           value={litros || ''} 
-                          onChange={(e) => setLitros(parseFloat(e.target.value) || 0)}
+                          onChange={(e) => setLitros(lerNumero(e.target.value))}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="0.00"
                         />
@@ -767,9 +776,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                       <div>
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>KM Trabalhado (Líquido)</label>
                         <input 
-                          type="number" 
+                          type="text" inputMode="decimal" 
                           value={kmTrabalhado || ''} 
-                          onChange={(e) => setKmTrabalhado(parseFloat(e.target.value) || 0)}
+                          onChange={(e) => setKmTrabalhado(lerNumero(e.target.value))}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="Ex: 150"
                         />
@@ -777,9 +786,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                       <div>
                         <label className={`block text-xs font-medium mb-1.5 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>KM Total do Carro</label>
                         <input 
-                          type="number" 
+                          type="text" inputMode="decimal" 
                           value={kmTotal || ''} 
-                          onChange={(e) => setKmTotal(parseFloat(e.target.value) || 0)}
+                          onChange={(e) => setKmTotal(lerNumero(e.target.value))}
                           className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-800'}`}
                           placeholder="Ex: 180"
                         />
@@ -791,49 +800,12 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <input 
-                        type="text" 
-                        value={nomeReserva1} 
-                        onChange={(e) => setNomeReserva1(e.target.value)}
-                        className={`text-xs font-medium px-2 py-1 rounded w-full mb-1.5 border outline-none transition-colors ${modoEscuro ? 'bg-white/5 border-white/10 text-white/80' : 'bg-slate-100 border-slate-200 text-slate-600'}`}
-                      />
-                      <input 
-                        type="number" 
-                        value={valReserva1 || ''} 
-                        onChange={(e) => setValReserva1(parseFloat(e.target.value) || 0)}
-                        className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'border-slate-300 text-slate-800'}`}
-                        placeholder="0.00"
-                      />
+                  <div className="max-w-sm">
+                    <label className={`block text-sm font-semibold mb-2 ${modoEscuro ? 'text-white/80' : 'text-slate-700'}`}>Reserva de Acidente</label>
+                    <div aria-live="polite" className={`w-full px-4 py-3 rounded-lg border font-bold ${modoEscuro ? 'bg-black/50 border-white/10 text-white' : 'bg-slate-100 border-slate-200 text-slate-800'}`}>
+                      {valReservaAcidente.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </div>
-                    <div>
-                      <input 
-                        type="text" 
-                        value={nomeReserva2} 
-                        onChange={(e) => setNomeReserva2(e.target.value)}
-                        className={`text-xs font-medium px-2 py-1 rounded w-full mb-1.5 border outline-none transition-colors ${modoEscuro ? 'bg-white/5 border-white/10 text-white/80' : 'bg-slate-100 border-slate-200 text-slate-600'}`}
-                      />
-                      <input 
-                        type="number" 
-                        value={valReserva2 || ''} 
-                        onChange={(e) => setValReserva2(parseFloat(e.target.value) || 0)}
-                        className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white placeholder-white/30' : 'border-slate-300 text-slate-800'}`}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    <div>
-                      <input 
-                        type="text" 
-                        value={nomeReserva3} 
-                        onChange={(e) => setNomeReserva3(e.target.value)}
-                        className={`text-xs font-medium px-2 py-1 rounded w-full mb-1.5 border outline-none transition-colors ${modoEscuro ? 'bg-white/5 border-white/10 text-white/80' : 'bg-slate-100 border-slate-200 text-slate-600'}`}
-                      />
-                      <div className={`w-full px-3 py-2.5 text-sm border rounded-lg font-bold flex items-center h-[42px] transition-colors ${modoEscuro ? 'bg-black/50 border-white/10 text-white' : 'bg-slate-100 border-slate-200 text-slate-700'}`}>
-                        R$ {valReservaAcidente.toFixed(2)}
-                      </div>
-                      <span className="text-[10px] text-white/50 block mt-1">Auto: R$ 0,038 x KM Total</span>
-                    </div>
+                    <p className={`text-xs mt-2 ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>Automático: R$ 0,038 × KM Total do Carro</p>
                   </div>
 
                   <button 
