@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import AuthGate from '@/components/AuthGate';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
@@ -89,6 +89,7 @@ interface Lancamento {
   id: string;
   data: string; // Formato DD/MM/AAAA
   diaSemana: string;
+  descricao?: string;
   tipo: 'turno' | 'avulso_saida' | 'avulso_entrada';
   faturamentoBruto: number;
   combustivel: number;
@@ -182,7 +183,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
   const STORAGE_KEY = uid ? `gestao-app-dados-v2-${uid}` : '';
 
-  const aplicarDados = (dados: Partial<DadosPersistidos>) => {
+  const aplicarDados = useCallback((dados: Partial<DadosPersistidos>) => {
     if (Array.isArray(dados.custosFixos)) setCustosFixos(dados.custosFixos);
     if (Array.isArray(dados.reservasDiarias)) setReservasDiarias(dados.reservasDiarias);
     if (typeof dados.nomeReserva1 === 'string') setNomeReserva1(dados.nomeReserva1);
@@ -191,9 +192,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     if (typeof dados.lembrete === 'string') setLembrete(dados.lembrete);
     if (Array.isArray(dados.historico)) setHistorico(dados.historico);
     if (typeof dados.modoEscuro === 'boolean') setModoEscuro(dados.modoEscuro);
-  };
+  }, []);
 
-  const capturarDados = (): DadosPersistidos => ({
+  const dadosPersistidos = useMemo<DadosPersistidos>(() => ({
     custosFixos,
     reservasDiarias,
     nomeReserva1,
@@ -202,7 +203,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     lembrete,
     historico,
     modoEscuro,
-  });
+  }), [custosFixos, reservasDiarias, nomeReserva1, nomeReserva2, nomeReserva3, lembrete, historico, modoEscuro]);
+  const dadosIniciaisRef = useRef(dadosPersistidos);
 
   // Recupera a cópia da nuvem; na primeira utilização, migra os dados locais para o Firestore.
   useEffect(() => {
@@ -217,7 +219,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         if (snapshot.exists()) {
           if (ativo) aplicarDados(snapshot.data() as Partial<DadosPersistidos>);
         } else {
-          let dadosIniciais: DadosPersistidos = capturarDados();
+          let dadosIniciais: DadosPersistidos = dadosIniciaisRef.current;
           try {
             const locais = localStorage.getItem(STORAGE_KEY);
             if (locais) {
@@ -254,13 +256,13 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
     carregar();
     return () => { ativo = false; };
-  }, [uid]);
+  }, [uid, STORAGE_KEY, aplicarDados]);
 
   // Mantém um backup no navegador e sincroniza alterações com o Firestore.
   useEffect(() => {
     if (!dadosCarregados || !uid) return;
 
-    const dados = capturarDados();
+    const dados = dadosPersistidos;
     try {
       if (STORAGE_KEY) localStorage.setItem(STORAGE_KEY, JSON.stringify(dados));
     } catch (erro) {
@@ -269,8 +271,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 
     if (!firebasePronto || !uid) return;
 
-    setStatusPersistencia('Salvando alterações...');
     const temporizador = window.setTimeout(async () => {
+      setStatusPersistencia('Salvando alterações...');
       try {
         await setDoc(doc(db, 'users', uid, 'appData', 'main'), dados);
         setStatusPersistencia('Dados sincronizados com a nuvem.');
@@ -281,7 +283,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     }, 700);
 
     return () => window.clearTimeout(temporizador);
-  }, [custosFixos, reservasDiarias, nomeReserva1, nomeReserva2, nomeReserva3, lembrete, historico, modoEscuro, dadosCarregados, firebasePronto, uid]);
+  }, [dadosPersistidos, dadosCarregados, firebasePronto, uid, STORAGE_KEY]);
 
   const infoDataAtual = useMemo(() => {
     const hoje = new Date();
@@ -293,9 +295,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
   }, []);
 
   const { diasUteisMes, custoFixoDiarioPorItem, totalCustoFixoDiario } = useMemo(() => {
-    const hoje = new Date();
-    const ano = hoje.getFullYear();
-    const mes = hoje.getMonth();
+    const [ano, mes] = mesAtual.split('-').map(Number);
     // Dias de segunda a sábado, descontando feriados nacionais.
     const diasRestantes = diasTrabalhoNoMes(ano, mes);
 
@@ -328,7 +328,11 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
   };
 
   const totalReservasDiarias = reservasDoTurno.reduce((soma, reserva) => soma + (Number(reserva.valor) || 0), 0);
-  const totalReservasTurno = valReservaAcidente + totalReservasDiarias;
+  const turnoOriginal = historico.find(item => item.id === idEditando);
+  const totalReservasTurno = valReservaAcidente + totalReservasDiarias + valReserva1 + valReserva2;
+  const custoFixoAplicado = turnoOriginal?.custosFixosDia ?? totalCustoFixoDiario;
+  const saidasPreservadas = turnoOriginal?.saidas ?? [];
+  const totalSaidasPreservadas = saidasPreservadas.reduce((soma, saida) => soma + saida.valor, 0);
 
   // O painel usa os valores visíveis digitados, inclusive quando há vírgula decimal.
   // Os valores numéricos são a fonte de verdade para os cálculos do turno.
@@ -341,9 +345,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
   
   const temMovimentoNoTurno = faturamentoBruto > 0 || valorCombustivel > 0 || totalReservasTurno > 0 || idEditando !== null;
 
-  const custosFixosTurno = temMovimentoNoTurno ? totalCustoFixoDiario : 0;
+  const custosFixosTurno = temMovimentoNoTurno ? custoFixoAplicado : 0;
 
-  const totalDespesasDia = valorCombustivel + totalReservasTurno + custosFixosTurno;
+  const totalDespesasDia = valorCombustivel + totalReservasTurno + custosFixosTurno + totalSaidasPreservadas;
   const saldoLiquidoDia = faturamentoBruto - totalDespesasDia;
 
   const handleSalvarDia = () => {
@@ -363,9 +367,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       return;
     }
 
-    const totalDespesasSalvar = valorCombustivel + totalReservasTurno + totalCustoFixoDiario;
+    const totalDespesasSalvar = valorCombustivel + totalReservasTurno + custoFixoAplicado + totalSaidasPreservadas;
     const liquidoSalvar = faturamentoBruto - totalDespesasSalvar;
-    const detalheFixosSnapshot = { ...custoFixoDiarioPorItem };
+    const detalheFixosSnapshot = { ...(turnoOriginal ? turnoOriginal.detalheCustosFixosDia ?? {} : custoFixoDiarioPorItem) };
     const reservasSnapshot = reservasDoTurno.map(r => ({ ...r }));
 
     if (idEditando) {
@@ -377,13 +381,13 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         litros,
         kmTrabalhado,
         kmTotal,
-        reservaFevereiro: 0,
-        reservaInvestimento: 0,
+        reservaFevereiro: valReserva1,
+        reservaInvestimento: valReserva2,
         reservaAcidente: valReservaAcidente,
-        custosFixosDia: totalCustoFixoDiario,
+        custosFixosDia: custoFixoAplicado,
         detalheCustosFixosDia: detalheFixosSnapshot,
         reservasDiariasDia: reservasSnapshot,
-        saidas: [],
+        saidas: saidasPreservadas,
         totalDespesas: totalDespesasSalvar,
         liquido: liquidoSalvar,
       } : item));
@@ -400,13 +404,13 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         litros,
         kmTrabalhado,
         kmTotal,
-        reservaFevereiro: 0,
-        reservaInvestimento: 0,
+        reservaFevereiro: valReserva1,
+        reservaInvestimento: valReserva2,
         reservaAcidente: valReservaAcidente,
-        custosFixosDia: totalCustoFixoDiario,
+        custosFixosDia: custoFixoAplicado,
         detalheCustosFixosDia: detalheFixosSnapshot,
         reservasDiariasDia: reservasSnapshot,
-        saidas: [],
+        saidas: saidasPreservadas,
         totalDespesas: totalDespesasSalvar,
         liquido: liquidoSalvar,
       };
@@ -443,6 +447,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       data: new Date().toLocaleDateString('pt-BR'),
       diaSemana: infoDataAtual.diaSemanaTexto,
       tipo: isEntrada ? 'avulso_entrada' : 'avulso_saida',
+      descricao: nomeAvulso.trim(),
       faturamentoBruto: isEntrada ? valorAvulso : 0,
       combustivel: 0,
       litros: 0,
@@ -458,7 +463,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       liquido: isEntrada ? valorAvulso : -valorAvulso,
     };
 
-    setHistorico([novoAvulso, ...historico]);
+    setHistorico(anteriores => [novoAvulso, ...anteriores]);
     setNomeAvulso('');
     setValorAvulso(0);
     setOrigemAvulsa('principal');
@@ -531,8 +536,10 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
     const acumuladoCustosFixos: { [id: string]: number } = {};
     custosFixos.forEach(c => { acumuladoCustosFixos[c.id] = 0; });
 
-    const porMes: { [key: string]: any } = {};
-    const porAno: { [key: string]: any } = {};
+    type Acumulado = { fat: number; desp: number; liq: number; diasTrabalho: number; comb: number; res1: number; res2: number; resAc: number; resDiarias: number };
+    const porMes: Record<string, Acumulado> = {};
+    const porAno: Record<string, Acumulado> = {};
+    const datasTrabalhadas = new Set<string>();
 
     historico.forEach(item => {
       totalFatGeral += item.faturamentoBruto;
@@ -576,7 +583,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         anoKey = partesData[2];
 
         if (!porMes[mesAnoKey]) {
-          porMes[mesAnoKey] = { fat: 0, desp: 0, liq: 0, diasTrabalho: 0, comb: 0, res1: 0, res2: 0, resAc: 0 };
+          porMes[mesAnoKey] = { fat: 0, desp: 0, liq: 0, diasTrabalho: 0, comb: 0, res1: 0, res2: 0, resAc: 0, resDiarias: 0 };
         }
         porMes[mesAnoKey].fat += item.faturamentoBruto;
         porMes[mesAnoKey].desp += item.totalDespesas;
@@ -585,10 +592,11 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         porMes[mesAnoKey].res1 += (item.reservaFevereiro || 0);
         porMes[mesAnoKey].res2 += (item.reservaInvestimento || 0);
         porMes[mesAnoKey].resAc += (item.reservaAcidente || 0);
-        if (item.tipo === 'turno') porMes[mesAnoKey].diasTrabalho += 1;
+        porMes[mesAnoKey].resDiarias += (item.reservasDiariasDia ?? []).reduce((soma, r) => soma + r.valor, 0);
+        if (item.tipo === 'turno' && !datasTrabalhadas.has(item.data)) porMes[mesAnoKey].diasTrabalho += 1;
 
         if (!porAno[anoKey]) {
-          porAno[anoKey] = { fat: 0, desp: 0, liq: 0, diasTrabalho: 0, comb: 0, res1: 0, res2: 0, resAc: 0 };
+          porAno[anoKey] = { fat: 0, desp: 0, liq: 0, diasTrabalho: 0, comb: 0, res1: 0, res2: 0, resAc: 0, resDiarias: 0 };
         }
         porAno[anoKey].fat += item.faturamentoBruto;
         porAno[anoKey].desp += item.totalDespesas;
@@ -597,7 +605,9 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
         porAno[anoKey].res1 += (item.reservaFevereiro || 0);
         porAno[anoKey].res2 += (item.reservaInvestimento || 0);
         porAno[anoKey].resAc += (item.reservaAcidente || 0);
-        if (item.tipo === 'turno') porAno[anoKey].diasTrabalho += 1;
+        porAno[anoKey].resDiarias += (item.reservasDiariasDia ?? []).reduce((soma, r) => soma + r.valor, 0);
+        if (item.tipo === 'turno' && !datasTrabalhadas.has(item.data)) porAno[anoKey].diasTrabalho += 1;
+        if (item.tipo === 'turno') datasTrabalhadas.add(item.data);
       }
 
       // Subtrações das retiradas avulsas
@@ -630,7 +640,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       }
     });
 
-    const totalDiasTrabalho = historico.filter(h => h.tipo === 'turno').length;
+    const totalDiasTrabalho = datasTrabalhadas.size;
     const historicoAvulso = historico.filter(h => h.tipo !== 'turno');
 
     return {
@@ -653,6 +663,8 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
       historicoAvulso
     };
   }, [historico, custosFixos, reservasDiarias]);
+
+  if (!dadosCarregados) return <div role="status" className="min-h-screen bg-slate-950 text-white flex items-center justify-center">Carregando seus dados com segurança...</div>;
 
   return (
     <main className={`min-h-screen p-6 md:p-8 transition-colors duration-200 ${modoEscuro ? 'bg-black text-slate-100' : 'bg-slate-100 text-slate-800'}`}>
@@ -1278,7 +1290,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                               )}
                             </td>
                             <td className={`p-4 ${modoEscuro ? 'text-white/80' : 'text-slate-700'}`}>
-                              {isEntrada ? 'Entrada de Dinheiro Extra' : (saidaDetalhe?.nome || 'Despesa Avulsa')}
+                              {item.descricao || (isEntrada ? 'Entrada de Dinheiro Extra' : (saidaDetalhe?.nome || 'Despesa Avulsa'))}
                             </td>
                             <td className={`p-4 text-xs font-medium ${modoEscuro ? 'text-white/60' : 'text-slate-600'}`}>{nomeOrigemDestino}</td>
                             <td className={`p-4 font-bold ${isEntrada ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -1319,7 +1331,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                           <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>{dados.diasTrabalho} dias</td>
                           <td className="p-4 text-emerald-400 font-bold">R$ {dados.fat.toFixed(2)}</td>
                           <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {dados.comb.toFixed(2)}</td>
-                          <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {(dados.res1 + dados.res2 + dados.resAc).toFixed(2)}</td>
+                          <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {(dados.res1 + dados.res2 + dados.resAc + dados.resDiarias).toFixed(2)}</td>
                           <td className="p-4 text-rose-400 font-medium">R$ {dados.desp.toFixed(2)}</td>
                           <td className={`p-4 font-bold ${dados.liq >= 0 ? (modoEscuro ? 'text-blue-400' : 'text-blue-500') : 'text-rose-400'}`}>
                             R$ {dados.liq.toFixed(2)}
@@ -1358,7 +1370,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
                           <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>{dados.diasTrabalho} dias</td>
                           <td className="p-4 text-emerald-400 font-bold">R$ {dados.fat.toFixed(2)}</td>
                           <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {dados.comb.toFixed(2)}</td>
-                          <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {(dados.res1 + dados.res2 + dados.resAc).toFixed(2)}</td>
+                          <td className={`p-4 ${modoEscuro ? 'text-white/70' : 'text-slate-600'}`}>R$ {(dados.res1 + dados.res2 + dados.resAc + dados.resDiarias).toFixed(2)}</td>
                           <td className="p-4 text-rose-400 font-medium">R$ {dados.desp.toFixed(2)}</td>
                           <td className={`p-4 font-bold ${dados.liq >= 0 ? (modoEscuro ? 'text-blue-400' : 'text-blue-500') : 'text-rose-400'}`}>
                             R$ {dados.liq.toFixed(2)}
@@ -1382,7 +1394,7 @@ function Dashboard({ uid, usuarioEmail }: { uid: string; usuarioEmail: string | 
 export default function Home() {
   const [usuario, setUsuario] = useState<{ uid: string; email: string | null } | null>(null);
   const [carregando, setCarregando] = useState(true);
-  useEffect(() => onAuthStateChanged(auth, (atual) => {
+  useEffect(() => onAuthStateChanged(auth, (atual: User | null) => {
     setUsuario(atual && !atual.isAnonymous ? { uid: atual.uid, email: atual.email } : null);
     setCarregando(false);
   }), []);

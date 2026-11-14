@@ -37,12 +37,12 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ## Persistência e sincronização dos dados
 
-O painel salva automaticamente uma cópia no navegador e sincroniza os dados com o Cloud Firestore usando autenticação anônima do Firebase. Cada instalação autenticada recebe um espaço de dados próprio.
+O painel salva automaticamente uma cópia no navegador e sincroniza os dados com o Cloud Firestore usando uma conta de e-mail e senha do Firebase. Os dados ficam separados pelo UID da conta.
 
 Para ativar a sincronização na nuvem:
 
-1. No Firebase Console, abra **Authentication → Sign-in method** e habilite **Anonymous**.
+1. No Firebase Console, abra **Authentication → Sign-in method** e habilite **Email/Password**.
 2. No Firebase Console, abra **Firestore Database → Rules** e publique o conteúdo do arquivo `firestore.rules` deste repositório.
 3. Faça o deploy da aplicação novamente.
 
-Se a nuvem estiver indisponível, o painel continua salvando no armazenamento local do navegador. Para que a sincronização funcione entre dispositivos, será necessário usar uma conta de login compartilhada; a autenticação anônima atual separa os dados por navegador/instalação.
+Se a nuvem estiver indisponível após o login, o painel continua salvando no armazenamento local do navegador. Entre com a mesma conta nos seus dispositivos para acessar os dados da nuvem. As regras precisam incluir `reservasDiarias` na lista de campos permitidos; atualizar o arquivo local não publica as regras no Firebase.
