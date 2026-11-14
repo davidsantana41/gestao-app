@@ -9,6 +9,7 @@ service cloud.firestore {
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
           'custosFixos',
+          'reservasDiarias',
           'nomeReserva1',
           'nomeReserva2',
           'nomeReserva3',
