@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:dashboard": "node scripts/check-dashboard.mjs",
+    "test": "node scripts/check-calculos.mjs"
   },
   "dependencies": {
     "firebase": "^13.2.0",

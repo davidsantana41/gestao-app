@@ -1,48 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+﻿# APPCAR
 
-## Getting Started
+Aplicativo de gestão de turnos, combustível, reservas e despesas, reconstruído em Next.js e React. Mantém o projeto Firebase e o formato dos dados da versão anterior.
 
-First, run the development server:
+## Executar
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```powershell
+npm.cmd install
+npm.cmd run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Abra http://localhost:3000. No PowerShell, os comandos com `.cmd` funcionam mesmo quando a política de execução bloqueia `npm.ps1`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Organização
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `src/app/page.tsx`: sessão, navegação e ações do painel.
+- `src/components/gestao/TurnoForm.tsx`: formulário com um estado único; o resumo deriva diretamente dos campos.
+- `src/lib/gestao.ts`: cálculos e tipos compatíveis com o histórico anterior.
+- `src/lib/useGestao.ts`: carregamento, cópias locais e sincronização serializada.
+- `src/components/gestao/`: custos fixos, movimentações avulsas e relatórios.
 
-## Learn More
+## Regras do turno
 
-To learn more about Next.js, take a look at the following resources:
+- Preço por litro = valor gasto ÷ litros abastecidos.
+- Consumo médio = KM trabalhado ÷ litros abastecidos.
+- Reserva de acidente = R$ 0,038 × KM total do carro.
+- Reservas diárias são valores diretos por turno e entram nas despesas do turno.
+- Custos fixos são rateados de segunda a sábado, descontando os feriados configurados no calendário do aplicativo. O rateio usa o mês da data escolhida.
+- A edição preserva o rateio e as saídas do turno original. Salvar uma edição mantém o mesmo ID.
+- Retirar de uma reserva ou caixinha reduz o saldo dessa reserva, sem descontar novamente o saldo principal.
+- Ao salvar, os nomes das reservas permanecem e os valores do próximo turno começam zerados.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Preservação dos dados
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+O documento continua em `users/{uid}/appData/main`; a cópia local continua em `gestao-app-dados-v2-{uid}`. As regras em `firestore.rules` não precisam mudar.
 
-## Deploy on Vercel
+Carregar o painel não grava na nuvem. Na primeira leitura, a versão reconstruída guarda uma cópia dos dados locais e outra dos dados da nuvem no navegador, com os sufixos `-antes-reconstrucao` e `-nuvem-antes-reconstrucao`. Os registros antigos são mantidos como foram salvos; atualizar a tela não os recalcula.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Alterações são copiadas para o navegador antes da sincronização. As gravações na nuvem são executadas em sequência. Se houver divergência entre a versão local e a nuvem, o painel pede que o usuário escolha a versão a usar, preservando as duas cópias anteriores. O botão **Exportar backup** baixa os dados atuais em JSON.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Os formulários de turno permanecem preenchidos ao trocar de aba dentro do painel. Um formulário ainda não salvo não sobrevive ao fechamento ou recarregamento da página.
 
-## Persistência e sincronização dos dados
+Para o Firebase, habilite Email/Password no Authentication, autorize o domínio e publique `firestore.rules` no projeto existente. O código local não publica regras nem altera configurações do Firebase.
 
-O painel salva automaticamente uma cópia no navegador e sincroniza os dados com o Cloud Firestore usando uma conta de e-mail e senha do Firebase. Os dados ficam separados pelo UID da conta.
+## Verificar
 
-Para ativar a sincronização na nuvem:
+```powershell
+npm.cmd test
+npm.cmd run test:dashboard
+npm.cmd run lint
+npm.cmd run build
+```
 
-1. No Firebase Console, abra **Authentication → Sign-in method** e habilite **Email/Password**.
-2. No Firebase Console, abra **Firestore Database → Rules** e publique o conteúdo do arquivo `firestore.rules` deste repositório.
-3. Faça o deploy da aplicação novamente.
+O teste de interface usa o Next.js real, Chrome sem interface e armazenamento simulado em um projeto temporário dentro de `.next/dashboard-check`. Não utiliza contas ou documentos reais. Requer Node.js 24 e Chrome no caminho padrão do Windows; outro executável pode ser informado em `CHROME_PATH`. Verifica nomes e totais, combustível, exclusão e cancelamento, edição sem duplicação, preservação do histórico, layout móvel e recuperação de falhas de sincronização.
 
-Se a nuvem estiver indisponível após o login, o painel continua salvando no armazenamento local do navegador. Entre com a mesma conta nos seus dispositivos para acessar os dados da nuvem. As regras precisam incluir `reservasDiarias` na lista de campos permitidos; atualizar o arquivo local não publica as regras no Firebase.
+A cópia do código anterior à reconstrução fica em `.backups/`, ignorada pelo Git. Essa cópia contém código, não os documentos de sua conta Firebase.
