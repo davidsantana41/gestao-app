@@ -1,5 +1,10 @@
 # Validação manual isolada da sincronização
 
+> Registro histórico do protocolo anterior. A implementação local mais recente usa
+> sincronização automática e gerações; seu roteiro e resultados estão em
+> [sincronizacao-automatica-reinicio.md](sincronizacao-automatica-reinicio.md).
+> Inclusões financeiras independentes agora são combinadas sem conflito manual.
+
 ## Ambiente preparado
 
 - Aplicativo: **http://127.0.0.1:3100**.

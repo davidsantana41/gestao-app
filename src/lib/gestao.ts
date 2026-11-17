@@ -1,3 +1,5 @@
+import type { SyncMetadata } from './syncSession';
+
 export interface SaidaItem {
   id: string;
   nome: string;
@@ -20,6 +22,7 @@ export interface ReservaDiariaItem {
 
 
 export interface DadosPersistidos {
+  _sync?: SyncMetadata;
   reservasDiarias?: ReservaDiariaItem[];
   custosFixos: CustoFixoItem[];
   nomeReserva1: string;

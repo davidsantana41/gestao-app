@@ -1,161 +1,86 @@
 ﻿import { before, after, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { doc, getDocFromServer, setDoc, disableNetwork, enableNetwork, runTransaction } from 'firebase/firestore';
-import { SyncSession, conditionalWrite, SyncConflict, version, readWithTimeout } from '../src/lib/syncSession.ts';
-
+import { initializeTestEnvironment, assertFails } from '@firebase/rules-unit-testing';
+import { doc, getDocFromServer, setDoc, disableNetwork, enableNetwork, onSnapshot } from 'firebase/firestore';
+import { SyncSession, conditionalWrite, resetTransaction, SyncConflict, mergeFinancial, version, readWithTimeout } from '../src/lib/syncSession.ts';
+import { resumir } from '../src/lib/gestao.ts';
 if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8088') throw new Error('Local Emulator required; no production fallback');
 const projectId='demo-appcar-isolation';
-let env, a, b;
-const initial=()=>({historico:[{id:'original',valor:100}],lembrete:'',modoEscuro:true});
-const ref=db=>doc(db,'users','sync-user','appData','main');
-class Store {
-  values=new Map(); fail=false;
-  get length(){return this.values.size;}
-  key(i){return [...this.values.keys()][i]??null;}
-  getItem(k){return this.values.get(k)??null;}
-  setItem(k,v){if(this.fail)throw new Error('Quota');this.values.set(k,v);}
+let env,a,b;const sessions=[];
+const initial=()=>({historico:[{id:'original',valor:100}],lembrete:'',modoEscuro:true,custosFixos:[{id:'c1',nome:'Teste',valorMensal:50}],reservasDiarias:[{id:'r1',nome:'Reserva',valor:20}],nomeReserva1:'A',nomeReserva2:'B',nomeReserva3:'C'});
+const ref=(db,uid='sync-user')=>doc(db,'users',uid,'appData','main');
+class Store{values=new Map();fail=false;get length(){return this.values.size;}key(i){return [...this.values.keys()][i]??null;}getItem(k){return this.values.get(k)??null;}setItem(k,v){if(this.fail)throw new Error('Quota');this.values.set(k,v);}}
+const read=async(db=b,uid='sync-user')=>(await getDocFromServer(ref(db,uid))).data()??null;
+const gate=()=>{let release;const promise=new Promise(r=>{release=r;});return{promise,release};};
+function create(db,local=new Store(),tab=new Store(),{live=false,transport,uid='sync-user'}={}){
+ const adapter=transport??{read:()=>read(db,uid),write:(base,next)=>conditionalWrite(db,uid,base,next),reset:plan=>resetTransaction(db,uid,plan),...(live?{listen:(accept,offline)=>onSnapshot(ref(db,uid),{includeMetadataChanges:true},s=>{if(s.metadata.fromCache)offline();else if(!s.metadata.hasPendingWrites)accept(s.exists()?s.data():null);},offline)}:{})};
+ const session=new SyncSession(db,uid,local,tab,value=>structuredClone(value),initial,adapter);sessions.push(session);return session;
 }
-const decode=value=>structuredClone(value);
-const create=(db,local=new Store(),tab=new Store())=>new SyncSession(db,'sync-user',local,tab,decode,initial);
-const read=async()=> (await getDocFromServer(ref(b))).data();
-const edit=(s,id)=>s.update(d=>({...d,historico:[...d.historico,{id,valor:10}]}));
-const gate=()=>{let release;const promise=new Promise(r=>{release=r;});return {promise,release};};
+const edit=(s,id)=>s.update(d=>({...d,historico:[{id,valor:10},...d.historico]}));
+const waitFor=async(check)=>{const start=Date.now();while(Date.now()-start<5000){if(check())return;await new Promise(r=>setTimeout(r,25));}assert.ok(check(),'Timed out waiting for automatic synchronization');};
+const prepare=async s=>{const p=await s.prepareReset();s.resetBackup(p.id);s.markResetExported(p.id);return p;};
+const confirmation={uid:'sync-user',phrase:'REINICIAR MINHA CONTA',backupVerified:true};
 before(async()=>{env=await initializeTestEnvironment({projectId,firestore:{host:'127.0.0.1',port:8088,rules:await readFile('firestore.rules','utf8')}});});
-beforeEach(async()=>{await env.clearFirestore();a=env.authenticatedContext('sync-user').firestore();b=env.authenticatedContext('sync-user').firestore();await setDoc(ref(a),initial());});
-after(async()=>{await env?.cleanup();});
+beforeEach(async()=>{sessions.splice(0).forEach(s=>s.close());await env.clearFirestore();a=env.authenticatedContext('sync-user').firestore();b=env.authenticatedContext('sync-user').firestore();await setDoc(ref(a),initial());});
+after(async()=>{sessions.forEach(s=>s.close());await env?.cleanup();});
 
-test('same base, simultaneous writes: exactly one accepted, loser is a conflict',async()=>{
- const base=await read();const start=gate();
- const attempt=async(db,id)=>{await start.promise;return conditionalWrite(db,'sync-user',base,{...base,lembrete:id});};
- const tasks=[attempt(a,'A'),attempt(b,'B')];start.release();
- const results=await Promise.allSettled(tasks);
- assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
- assert.ok(results.find(r=>r.status==='rejected').reason instanceof SyncConflict);
- assert.deepEqual((await read()).historico,base.historico);
+test('simultaneous independent financial entries merge without duplicates',async()=>{
+ const base=await read(),start=gate();const write=async(db,id)=>{await start.promise;return conditionalWrite(db,'sync-user',base,{...base,historico:[{id,valor:10},...base.historico]});};
+ const jobs=[write(a,'A'),write(b,'B')];start.release();await Promise.all(jobs);const cloud=await read();assert.deepEqual(new Set(cloud.historico.map(h=>h.id)),new Set(['original','A','B']));assert.equal(cloud._sync.revision,2);
 });
-test('SDK retries recheck original base after a forced concurrent commit',async()=>{
- const base=await read(), entered=gate(), resume=gate();let attempts=0;
- const tx=runTransaction(a,async t=>{const snapshot=await t.get(ref(a));attempts++;if(attempts===1){entered.release();await resume.promise;}if(version(snapshot.data())!==version(base))throw new SyncConflict(snapshot.data());t.set(ref(a),{...base,lembrete:'stale'});});
- await entered.promise;await conditionalWrite(b,'sync-user',base,{...base,lembrete:'winner'});resume.release();
- await assert.rejects(tx,SyncConflict);assert.ok(attempts>=2);assert.equal((await read()).lembrete,'winner');
+test('concurrent scalar changes in the same field require a real conflict',async()=>{
+ const base=await read(),start=gate();const write=async(db,text)=>{await start.promise;return conditionalWrite(db,'sync-user',base,{...base,lembrete:text});};const jobs=[write(a,'A'),write(b,'B')];start.release();const out=await Promise.allSettled(jobs);assert.equal(out.filter(x=>x.status==='fulfilled').length,1);assert.ok(out.find(x=>x.status==='rejected').reason instanceof SyncConflict);
 });
-test('stale theme change cannot erase another device turn',async()=>{
- const x=create(a),y=create(b);await Promise.all([x.start(),y.start()]);edit(x,'A');await x.wait();
- y.update(d=>({...d,modoEscuro:false}));await y.flush();assert.equal(y.conflict,true);assert.equal(y.pending,true);
- assert.equal((await read()).historico.length,2);assert.equal(y.data.modoEscuro,false);
+test('conditional transactions rebase independent fields while retaining original intent',async()=>{const base=await read();await Promise.all([conditionalWrite(a,'sync-user',base,{...base,lembrete:'A'}),conditionalWrite(b,'sync-user',base,{...base,modoEscuro:false})]);assert.equal((await read()).lembrete,'A');assert.equal((await read()).modoEscuro,false);});
+test('live server updates appear automatically in a clean second device',async()=>{
+ const x=create(a,new Store(),new Store(),{live:true}),y=create(b,new Store(),new Store(),{live:true});await Promise.all([x.start(),y.start()]);edit(x,'A');await x.wait();await waitFor(()=>y.data.historico.some(h=>h.id==='A'));assert.equal(y.conflict,false);assert.equal(y.pending,false);
 });
-test('stale edit cannot resurrect an excluded record',async()=>{
- const base=await read();await conditionalWrite(a,'sync-user',base,{...base,historico:[]});
- await assert.rejects(conditionalWrite(b,'sync-user',base,{...base,lembrete:'stale'}),SyncConflict);assert.deepEqual((await read()).historico,[]);
-});
-test('offline edit survives reload; reconnection detects a changed server',async()=>{
- const local=new Store(),tab=new Store(),x=create(a,local,tab);await x.start();await disableNetwork(a);edit(x,'offline');await x.flush();assert.equal(x.pending,true);
- x.close();const reloaded=create(a,local,tab);await reloaded.start();assert.equal(reloaded.data.historico.length,2);
- const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'other device'});
- await enableNetwork(a);await reloaded.retry();assert.equal(reloaded.conflict,true);assert.equal(reloaded.pending,true);assert.equal((await read()).historico.length,1);
-});
-test('offline edit without remote changes reconnects exactly once',async()=>{
- const x=create(a);await x.start();await disableNetwork(a);edit(x,'offline');await x.flush();await assert.rejects(x.wait());
- await enableNetwork(a);await x.retry();await x.wait();await x.retry();assert.equal((await read()).historico.length,2);assert.equal(x.pending,false);
-});
-test('cloud changes while conflict dialog is open: choice rejected and both preserved',async()=>{
- const x=create(a);await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'B'});edit(x,'A');await x.flush();
- const current=await read();await conditionalWrite(b,'sync-user',current,{...current,lembrete:'C'});
- assert.equal(await x.resolve('local'),false);assert.equal((await read()).lembrete,'C');assert.equal(x.data.historico.length,2);
- assert.ok([...x['local'].values.keys()].some(k=>k.includes('-antes-resolver-local-')));
-});
-test('explicit remote choice preserves rejected local data in unique backups',async()=>{
- const local=new Store(),x=create(a,local);await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'remote'});edit(x,'local');await x.flush();
- assert.equal(await x.resolve('nuvem'),true);assert.equal(x.data.lembrete,'remote');assert.equal(x.pending,false);
- const backups=[...local.values.entries()].filter(([k])=>k.includes('-antes-resolver-local-'));
- assert.equal(JSON.parse(backups[0][1]).historico.length,2);
-});
-test('explicit local choice checks current version and retains remote backup',async()=>{
- const local=new Store(),x=create(a,local);await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'remote'});edit(x,'local');await x.flush();
- assert.equal(await x.resolve('local'),true);await x.wait();assert.equal((await read()).historico.length,2);
- assert.ok([...local.values.entries()].some(([k,v])=>k.includes('-antes-resolver-nuvem-')&&JSON.parse(v).lembrete==='remote'));
-});
-test('two tabs share localStorage but own separate pending journals',async()=>{
- const local=new Store(),tabA=new Store(),tabB=new Store(),x=create(a,local,tabA),y=create(b,local,tabB);await Promise.all([x.start(),y.start()]);
- await Promise.all([disableNetwork(a),disableNetwork(b)]);edit(x,'tabA');edit(y,'tabB');await Promise.all([x.flush(),y.flush()]);
- assert.notEqual(x.branch,y.branch);assert.equal(JSON.parse(local.getItem(x.branch)).data.historico[1].id,'tabA');assert.equal(JSON.parse(local.getItem(y.branch)).data.historico[1].id,'tabB');
- x.close();const reload=create(a,local,tabA);await reload.start();assert.equal(reload.data.historico[1].id,'tabA');assert.ok(reload.recoveries.some(r=>r.data.historico[1]?.id==='tabB'));
- await Promise.all([enableNetwork(a),enableNetwork(b)]);
-});
-test('multiple edits before confirmation remain pending until the latest is committed',async()=>{
- const x=create(a);await x.start();edit(x,'first');edit(x,'second');edit(x,'third');await x.wait();
- assert.equal((await read()).historico.length,4);assert.equal(x.pending,false);assert.equal(JSON.parse(x['local'].getItem(x.branch)).pending,false);
-});
-test('storage failure rejects change and writes nothing',async()=>{
- const local=new Store(),x=create(a,local);await x.start();local.fail=true;assert.equal(edit(x,'lost'),false);assert.equal(x.data.historico.length,1);assert.equal((await read()).historico.length,1);assert.match(x.error,/salvar/);
-});
-test('permission denied retains local pending and prevents a successful sign out wait',async()=>{
- const wrong=env.authenticatedContext('different-user').firestore(),x=create(wrong);x.data=initial();x.base=initial();x.known=true;
- edit(x,'denied');await x.flush();assert.equal(x.pending,true);await assert.rejects(x.wait());assert.equal((await read()).historico.length,1);
-});
-test('load and refresh never write; remote changes do not replace form source',async()=>{
- const x=create(a);await x.start();assert.deepEqual(await read(),initial());const base=await read();
- await conditionalWrite(b,'sync-user',base,{...base,lembrete:'new'});await x.refresh();assert.equal(x.data.lembrete,'');assert.equal(x.conflict,true);assert.equal((await read()).lembrete,'new');
-});
-test('missing document: concurrent creations cannot overwrite',async()=>{
- await env.clearFirestore();const results=await Promise.allSettled([conditionalWrite(a,'sync-user',null,initial()),conditionalWrite(b,'sync-user',null,{...initial(),lembrete:'B'})]);
- assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.ok(results.find(r=>r.status==='rejected').reason instanceof SyncConflict);
-});
-test('legacy copies without a base demand a choice and are not uploaded',async()=>{
- const local=new Store();local.setItem('gestao-app-dados-v2-sync-user',JSON.stringify({...initial(),lembrete:'legacy'}));const x=create(a,local);await x.start();await x.flush();assert.equal(x.conflict,true);assert.equal((await read()).lembrete,'');
-});
-test('account isolation: recoveries never include another UID',async()=>{
- const local=new Store();local.setItem('gestao-app-dados-v2-other-sync-test',JSON.stringify({format:1,uid:'other',data:{private:true},pending:true}));const x=create(a,local);await x.start();assert.deepEqual(x.recoveries,[]);
-});
-test('content versions ignore property order but preserve nested financial values',()=>{
- assert.equal(version({a:1,b:[{x:2,y:3}]}),version({b:[{y:3,x:2}],a:1}));assert.notEqual(version({a:1}),version({a:2}));assert.notEqual(version(null),version({}));
-});
+test('clean refresh adopts remote data without asking to choose versions',async()=>{const x=create(a);await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'remote'});await x.refresh();assert.equal(x.data.lembrete,'remote');assert.equal(x.conflict,false);});
+test('a stale theme change preserves a financial entry from another device',async()=>{const x=create(a),y=create(b);await Promise.all([x.start(),y.start()]);edit(x,'A');await x.wait();y.update(d=>({...d,modoEscuro:false}));await y.wait();assert.equal(y.conflict,false);assert.equal((await read()).historico.length,2);assert.equal((await read()).modoEscuro,false);});
+test('concurrent edits to the same financial record remain atomic and conflicting',async()=>{const x=create(a),base=initial();await x.start();await conditionalWrite(b,'sync-user',base,{...base,historico:[{id:'original',valor:200}]});x.update(d=>({...d,historico:[{id:'original',valor:300}]}));await x.flush();assert.equal(x.conflict,true);assert.equal(x.data.historico[0].valor,300);assert.equal((await read()).historico[0].valor,200);});
+test('deletion versus edit is a real conflict, not silent resurrection',async()=>{const base=await read();await conditionalWrite(a,'sync-user',base,{...base,historico:[]});await assert.rejects(conditionalWrite(b,'sync-user',base,{...base,historico:[{id:'original',valor:999}]}),SyncConflict);assert.deepEqual((await read()).historico,[]);});
+test('independent configuration items merge but divergent edits of one item do not',()=>{const base=initial(),local={...base,custosFixos:[...base.custosFixos,{id:'c2',valorMensal:10}]},remote={...base,custosFixos:[{...base.custosFixos[0],valorMensal:80}]};assert.equal(mergeFinancial(base,local,remote).custosFixos.length,2);assert.throws(()=>mergeFinancial(base,{...base,custosFixos:[{...base.custosFixos[0],valorMensal:90}]},remote),SyncConflict);});
+test('financial form opened before a remote edit detects conflict on submission',async()=>{const x=create(a);await x.start();const formBase=structuredClone(x.data);await conditionalWrite(b,'sync-user',formBase,{...formBase,historico:[{id:'original',valor:200}]});await x.refresh();x.update(d=>({...d,historico:[{id:'original',valor:300}]}),formBase);assert.equal(x.conflict,true);assert.equal(x.pending,true);assert.equal((await read()).historico[0].valor,200);});
+test('new entry from an older form merges with financial additions received meanwhile',async()=>{const x=create(a);await x.start();const formBase=structuredClone(x.data);await conditionalWrite(b,'sync-user',formBase,{...formBase,historico:[{id:'B',valor:20},...formBase.historico]});await x.refresh();x.update(d=>({...d,historico:[{id:'A',valor:30},...d.historico]}),formBase);await x.wait();assert.equal((await read()).historico.length,3);assert.equal(x.conflict,false);});
+test('offline edit survives reload and merges independent remote work on reconnect',async()=>{const local=new Store(),tab=new Store(),x=create(a,local,tab);await x.start();await disableNetwork(a);edit(x,'offline');await x.flush();assert.equal(x.pending,true);x.close();const loaded=create(a,local,tab);await loaded.start();assert.equal(loaded.data.historico.length,2);const base=await read();await conditionalWrite(b,'sync-user',base,{...base,historico:[{id:'B',valor:5},...base.historico]});await enableNetwork(a);await loaded.retry();await loaded.wait();assert.equal((await read()).historico.length,3);assert.equal(loaded.conflict,false);});
+test('offline conflicting edit is preserved after reconnect',async()=>{const x=create(a);await x.start();await disableNetwork(a);x.update(d=>({...d,historico:[{id:'original',valor:300}]}));await x.flush();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,historico:[{id:'original',valor:200}]});await enableNetwork(a);await x.retry();assert.equal(x.conflict,true);assert.equal(x.data.historico[0].valor,300);assert.equal((await read()).historico[0].valor,200);});
+test('offline edit without remote changes is sent once across retries and reloads',async()=>{const local=new Store(),tab=new Store(),x=create(a,local,tab);await x.start();await disableNetwork(a);edit(x,'offline');await x.flush();await assert.rejects(x.wait());await enableNetwork(a);await x.retry();await x.wait();await x.retry();x.close();const y=create(a,local,tab);await y.start();await y.retry();assert.equal((await read()).historico.filter(h=>h.id==='offline').length,1);});
+test('explicit conflict choice rechecks the version reviewed before the modal opened',async()=>{const x=create(a);await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'B'});x.update(d=>({...d,lembrete:'A'}));await x.flush();const reviewed=version(x.remote),cloud=await read();await conditionalWrite(b,'sync-user',cloud,{...cloud,lembrete:'C'});await x.refresh();assert.equal(await x.resolve('local',reviewed),false);assert.equal((await read()).lembrete,'C');assert.equal(x.data.lembrete,'A');});
+test('manual cloud choice preserves the rejected local version',async()=>{const local=new Store(),x=create(a,local);await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'B'});x.update(d=>({...d,lembrete:'A'}));await x.flush();assert.equal(await x.resolve('nuvem'),true);assert.ok([...local.values.entries()].some(([k,v])=>k.includes('-antes-resolver-local-')&&JSON.parse(v).lembrete==='A'));assert.equal(x.data.lembrete,'B');});
+test('two tabs sharing storage retain separate pending journals',async()=>{const local=new Store(),ta=new Store(),tb=new Store(),x=create(a,local,ta),y=create(b,local,tb);await Promise.all([x.start(),y.start()]);await Promise.all([disableNetwork(a),disableNetwork(b)]);edit(x,'tab-A');edit(y,'tab-B');await Promise.all([x.flush(),y.flush()]);assert.notEqual(x.branch,y.branch);assert.ok(JSON.parse(local.getItem(x.branch)).data.historico.some(h=>h.id==='tab-A'));assert.ok(JSON.parse(local.getItem(y.branch)).data.historico.some(h=>h.id==='tab-B'));await Promise.all([enableNetwork(a),enableNetwork(b)]);await Promise.all([x.retry(),y.retry()]);await Promise.all([x.wait(),y.wait()]);assert.equal((await read()).historico.length,3);});
+test('late acknowledgement cannot clear newer local edits',async()=>{const entered=gate(),resume=gate();let first=true;const x=create(a,new Store(),new Store(),{transport:{read:()=>read(a),write:async(base,next)=>{const committed=await conditionalWrite(a,'sync-user',base,next);if(first){first=false;entered.release();await resume.promise;}return committed;}}});await x.start();edit(x,'first');await entered.promise;edit(x,'second');assert.equal(x.pending,true);resume.release();await x.wait();assert.equal((await read()).historico.length,3);});
+test('uncertain write acknowledgement is reconciled without duplicate entries',async()=>{let once=true;const x=create(a,new Store(),new Store(),{transport:{read:()=>read(a),write:async(base,next)=>{const committed=await conditionalWrite(a,'sync-user',base,next);if(once){once=false;throw new Error('ack lost');}return committed;}}});await x.start();edit(x,'committed');await x.flush();assert.equal(x.pending,true);await x.retry();await x.wait();assert.equal((await read()).historico.length,2);});
+test('local storage failure rejects a new change without touching the server',async()=>{const local=new Store(),x=create(a,local);await x.start();local.fail=true;assert.equal(edit(x,'lost'),false);assert.equal((await read()).historico.length,1);});
+test('permission denied retains local changes and prevents false saved confirmation',async()=>{const wrong=env.authenticatedContext('other').firestore(),x=create(wrong);x.data=initial();x.base=initial();x.known=true;edit(x,'denied');await x.flush();assert.equal(x.pending,true);await assert.rejects(x.wait());assert.equal((await read()).historico.length,1);});
+test('load is read-only and content versions ignore property order',async()=>{const x=create(a);await x.start();assert.deepEqual(await read(),initial());assert.equal(version({a:1,b:2}),version({b:2,a:1}));});
+test('empty document supports two concurrent first financial additions',async()=>{await env.clearFirestore();await Promise.all([conditionalWrite(a,'sync-user',null,{...initial(),historico:[{id:'A'}]}),conditionalWrite(b,'sync-user',null,{...initial(),historico:[{id:'B'}]})]);assert.equal((await read()).historico.length,2);});
+test('legacy pending copy with unknown base is never uploaded blindly',async()=>{const local=new Store();local.setItem('gestao-app-dados-v2-sync-user',JSON.stringify({...initial(),lembrete:'old'}));const x=create(a,local);await x.start();assert.equal(x.conflict,true);assert.equal((await read()).lembrete,'');});
+test('clean legacy copy with an acknowledged marker follows the server automatically',async()=>{const local=new Store();local.setItem('gestao-app-dados-v2-sync-user',JSON.stringify(initial()));local.setItem('gestao-app-dados-v2-sync-user-pendente','false');const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'new'});const x=create(a,local);await x.start();assert.equal(x.data.lembrete,'new');assert.equal(x.conflict,false);});
+test('a read timeout rejects without adopting a late response',async()=>{const delayed=gate();await assert.rejects(readWithTimeout(()=>delayed.promise,5),/demorou/);delayed.release(initial());});
 
-test('a delayed acknowledgement never clears newer local changes',async()=>{
- const local=new Store(),entered=gate(),resume=gate();let first=true;
- const transport={read,write:async(base,next)=>{await conditionalWrite(a,'sync-user',base,next);if(first){first=false;entered.release();await resume.promise;}}};
- const x=new SyncSession(a,'sync-user',local,new Store(),decode,initial,transport);await x.start();edit(x,'first');await entered.promise;
- edit(x,'second');assert.equal(x.pending,true);assert.equal(JSON.parse(local.getItem(x.branch)).pending,true);resume.release();await x.wait();assert.equal((await read()).historico.length,3);
-});
-test('uncertain commit confirmation preserves pending data until verified remotely',async()=>{
- const local=new Store();let once=true;
- const x=new SyncSession(a,'sync-user',local,new Store(),decode,initial,{read,write:async(base,next)=>{await conditionalWrite(a,'sync-user',base,next);if(once){once=false;throw new Error('Confirmation lost');}}});
- await x.start();edit(x,'committed');await x.flush();assert.equal(x.pending,true);assert.equal(JSON.parse(local.getItem(x.branch)).pending,true);
- await x.retry();await x.wait();assert.equal(x.pending,false);assert.equal(x.conflict,false);assert.equal((await read()).historico.length,2);
-});
-test('closing a session during a transaction does not change the next session pointer',async()=>{
- const local=new Store(),tab=new Store(),entered=gate(),resume=gate();
- const x=new SyncSession(a,'sync-user',local,tab,decode,initial,{read,write:async(base,next)=>{await conditionalWrite(a,'sync-user',base,next);entered.release();await resume.promise;}});
- await x.start();edit(x,'old-tab');await entered.promise;x.close();const y=create(b,local,tab);await y.start();const pointer=tab.getItem(y.prefix+'-session');resume.release();await x.flush();
- assert.equal(tab.getItem(y.prefix+'-session'),pointer);assert.equal(JSON.parse(local.getItem(x.branch)).pending,true);
-});
-test('edits made while conflict choice is being fetched are never discarded',async()=>{
- const entered=gate(),resume=gate();let hold=false;
- const x=new SyncSession(a,'sync-user',new Store(),new Store(),decode,initial,{read:async()=>{const result=await read();if(hold){entered.release();await resume.promise;}return result;},write:(base,next)=>conditionalWrite(a,'sync-user',base,next)});
- await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'remote'});edit(x,'local');await x.flush();hold=true;
- const resolution=x.resolve('nuvem');await entered.promise;edit(x,'newer-local');resume.release();assert.equal(await resolution,false);assert.equal(x.data.historico.length,3);assert.equal(x.pending,true);
-});
-test('refresh from storage event does not write shared compatibility keys',async()=>{
- const local=new Store(),x=create(a,local);await x.start();edit(x,'saved');await x.wait();const previous=local.getItem(x.prefix);
- const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'other'});await x.refresh();assert.equal(local.getItem(x.prefix),previous);assert.equal(x.conflict,true);
-});
-test('recovering another tab journal preserves current data and never writes automatically',async()=>{
- const local=new Store();const prefix='gestao-app-dados-v2-sync-user';
- local.setItem(prefix+'-sync-old',JSON.stringify({format:1,uid:'sync-user',base:initial(),data:{...initial(),lembrete:'recovered'},pending:true,known:true}));
- const x=create(a,local);await x.start();assert.equal(x.recover(prefix+'-sync-old'),true);assert.equal(x.data.lembrete,'recovered');assert.equal(x.conflict,true);assert.equal((await read()).lembrete,'');
- assert.ok([...local.values.keys()].some(k=>k.includes('-antes-recuperar-')));
-});
+test('reset preparation creates a complete backup without changing data',async()=>{const local=new Store(),x=create(a,local);await x.start();const plan=await x.prepareReset();assert.equal(plan.remoteCount,1);assert.equal(plan.localCount,1);const backup=x.resetBackup(plan.id);assert.equal(backup.uid,'sync-user');assert.deepEqual(backup.remote,initial());assert.deepEqual(await read(),initial());assert.equal(plan.exported,false);});
+test('reset rejects missing confirmation, wrong UID and unexported backup',async()=>{const x=create(a);await x.start();const plan=await x.prepareReset();await assert.rejects(x.executeReset(plan.id,confirmation),/backup/);x.markResetExported(plan.id);await assert.rejects(x.executeReset(plan.id,{...confirmation,uid:'other'}),/Confirme/);await assert.rejects(x.executeReset(plan.id,{...confirmation,phrase:'SIM'}),/Confirme/);assert.equal((await read()).historico.length,1);});
+test('confirmed reset zeros every financial aggregate and preserves account settings',async()=>{const x=create(a);await x.start();const plan=await prepare(x);assert.equal(await x.executeReset(plan.id,confirmation),true);const cloud=await read();assert.deepEqual(cloud.historico,[]);assert.deepEqual(cloud.custosFixos,initial().custosFixos);assert.equal(cloud.reservasDiarias[0].valor,0);assert.equal(cloud._sync.generation,1);assert.equal(cloud._sync.resetId,plan.id);const totals=resumir(cloud.historico);for(const k of ['faturamento','liquido','combustivel','dias','despesas'])assert.equal(totals[k],0);assert.equal(x.resetBackup(plan.id).remote.historico.length,1);});
+test('pending offline movements must be present in an exported backup before reset',async()=>{const x=create(a);await x.start();await disableNetwork(a);edit(x,'pending');await x.flush();await enableNetwork(a);const plan=await prepare(x);assert.equal(plan.hadPending,true);assert.ok(x.resetBackup(plan.id).local.historico.some(h=>h.id==='pending'));assert.equal(await x.executeReset(plan.id,confirmation),true);assert.deepEqual((await read()).historico,[]);});
+test('a local edit after backup invalidates reset authorization',async()=>{const x=create(a);await x.start();const plan=await prepare(x);edit(x,'new');await x.wait();await assert.rejects(x.executeReset(plan.id,confirmation),/novas alterações/);assert.equal((await read()).historico.length,2);});
+test('a remote edit after backup prevents the reset until a fresh backup is prepared',async()=>{const x=create(a);await x.start();const plan=await prepare(x),cloud=await read();await conditionalWrite(b,'sync-user',cloud,{...cloud,lembrete:'changed'});assert.equal(await x.executeReset(plan.id,confirmation),false);assert.equal((await read()).historico.length,1);});
+test('old offline device is quarantined after reset and cannot choose its local version',async()=>{const x=create(a),old=create(b);await Promise.all([x.start(),old.start()]);await disableNetwork(b);edit(old,'old-offline');await old.flush();const plan=await prepare(x);await x.executeReset(plan.id,confirmation);await enableNetwork(b);await old.retry();assert.equal(old.oldGeneration,true);assert.equal(old.pending,true);assert.equal(await old.resolve('local'),false);assert.deepEqual((await read()).historico,[]);assert.ok(old.data.historico.some(h=>h.id==='old-offline'));assert.equal(await old.resolve('nuvem'),true);assert.deepEqual(old.data.historico,[]);});
+test('rules block an old legacy client from restoring a complete stale document',async()=>{const old=initial(),x=create(a);await x.start();const plan=await prepare(x);await x.executeReset(plan.id,confirmation);await assertFails(setDoc(ref(b),old));assert.deepEqual((await read()).historico,[]);});
+test('rules block carrying old generation or revision even with valid metadata',async()=>{const x=create(a);await x.start();edit(x,'first');await x.wait();const old=await read();const plan=await prepare(x);await x.executeReset(plan.id,confirmation);await assertFails(setDoc(ref(b),old));const fresh=await read();await assertFails(setDoc(ref(b),{...fresh,historico:[{id:'stale'}]}));await assertFails(setDoc(ref(b),{...fresh,_sync:{...fresh._sync,generation:0,revision:0}}));});
+test('interruption before commit preserves all data and can be checked read-only',async()=>{const local=new Store(),tab=new Store(),x=create(a,local,tab);await x.start();const plan=await prepare(x);await disableNetwork(a);assert.equal(await x.executeReset(plan.id,confirmation),false);assert.equal(x.resetPlan.phase,'uncertain');assert.equal(edit(x,'blocked'),false);x.close();await enableNetwork(a);const loaded=create(a,local,tab);await loaded.start();await loaded.checkReset();assert.equal(loaded.resetPlan.phase,'prepared');assert.equal((await read()).historico.length,1);});
+test('lost reset acknowledgement and reload confirm the same reset without repeating it',async()=>{const local=new Store(),tab=new Store(),x=create(a,local,tab,{transport:{read:()=>read(a),write:(base,next)=>conditionalWrite(a,'sync-user',base,next),reset:async plan=>{await resetTransaction(a,'sync-user',plan);throw new Error('ack lost');}}});await x.start();const plan=await prepare(x);assert.equal(await x.executeReset(plan.id,confirmation),false);assert.equal(x.resetPlan.phase,'uncertain');const cloud=await read();await conditionalWrite(b,'sync-user',cloud,{...cloud,historico:[{id:'first-real',valor:17}]});x.close();const loaded=create(a,local,tab);await loaded.start();await loaded.checkReset();assert.equal(loaded.resetPlan.phase,'committed');assert.equal(loaded.data.historico[0].id,'first-real');assert.equal((await read())._sync.generation,1);});
+test('repeating the same reset transaction does not erase movements made afterwards',async()=>{const x=create(a);await x.start();const plan=await prepare(x);await x.executeReset(plan.id,confirmation);const cloud=await read();await conditionalWrite(b,'sync-user',cloud,{...cloud,historico:[{id:'new-real',valor:17}]});await resetTransaction(a,'sync-user',plan);assert.equal((await read()).historico[0].id,'new-real');});
+test('two concurrent resets cannot advance the same prepared generation twice',async()=>{const x=create(a),y=create(b);await Promise.all([x.start(),y.start()]);const px=await prepare(x),py=await prepare(y);const result=await Promise.all([x.executeReset(px.id,confirmation),y.executeReset(py.id,confirmation)]);assert.equal(result.filter(Boolean).length,1);assert.equal((await read())._sync.generation,1);});
+test('reset is scoped to the signed-in UID and leaves another user document unchanged',async()=>{const other=env.authenticatedContext('other-user').firestore();await setDoc(ref(other,'other-user'),initial());const x=create(a);await x.start();const plan=await prepare(x);await x.executeReset(plan.id,confirmation);assert.deepEqual(await read(other,'other-user'),initial());await assertFails(setDoc(ref(other),initial()));});
+test('a form from a previous generation cannot restore financial entries',async()=>{const x=create(a);await x.start();const oldForm=structuredClone(x.data),plan=await prepare(x);await x.executeReset(plan.id,confirmation);x.update(d=>({...d,historico:[{id:'stale-draft'},...d.historico]}),oldForm);assert.equal(x.oldGeneration,true);assert.equal(x.conflict,true);assert.equal(await x.resolve('local'),false);assert.deepEqual((await read()).historico,[]);});
+test('a backup from a different account cannot be exported as this reset',async()=>{const local=new Store(),x=create(a,local);await x.start();const plan=await x.prepareReset();local.setItem(plan.backupKey,JSON.stringify({schema:'appcar-reset-backup-v1',uid:'other'}));assert.throws(()=>x.markResetExported(plan.id),/outra conta/);assert.equal((await read()).historico.length,1);});
+test('reset backup storage failure prevents any financial reset',async()=>{const local=new Store(),x=create(a,local);await x.start();local.fail=true;await assert.rejects(x.prepareReset(),/Quota/);assert.equal(x.resetPlan,null);assert.equal((await read()).historico.length,1);});
 
-test('read timeout rejects and ignores a late response',async()=>{
- const late=gate();
- await assert.rejects(readWithTimeout(()=>late.promise,5),/demorou/);
- late.release(initial());await Promise.resolve();
-});
+test('listener cannot rebase a quarantined pre-reset form into the new generation',async()=>{const x=create(a,new Store(),new Store(),{live:true});await x.start();const oldForm=structuredClone(x.data),p=await prepare(x);await x.executeReset(p.id,confirmation);x.update(d=>({...d,historico:[{id:'stale-listener'},...d.historico]}),oldForm);await x.refresh();await new Promise(r=>setTimeout(r,100));assert.equal(x.oldGeneration,true);assert.equal(x.pending,true);assert.deepEqual((await read()).historico,[]);});
+test('old journal remains quarantined across reload after a reset',async()=>{const local=new Store(),tab=new Store(),x=create(a,local,tab);await x.start();const oldForm=structuredClone(x.data),p=await prepare(x);await x.executeReset(p.id,confirmation);x.update(d=>({...d,historico:[{id:'stale-reload'},...d.historico]}),oldForm);x.close();const loaded=create(a,local,tab);await loaded.start();await loaded.retry();assert.equal(loaded.oldGeneration,true);assert.deepEqual((await read()).historico,[]);});
+test('storage failure after reset commit is recoverable after space becomes available',async()=>{const local=new Store(),tab=new Store(),x=create(a,local,tab,{transport:{read:()=>read(a),write:(base,next)=>conditionalWrite(a,'sync-user',base,next),reset:async p=>{const cloud=await resetTransaction(a,'sync-user',p);local.fail=true;return cloud;}}});await x.start();const p=await prepare(x);await assert.rejects(x.executeReset(p.id,confirmation),/Quota/);local.fail=false;assert.equal(x.resetBackup(p.id).remote.historico.length,1);await x.checkReset();assert.equal(x.resetPlan.phase,'committed');assert.deepEqual(x.data.historico,[]);});
 
-test('a background refresh while the modal is open cannot authorize a newer version',async()=>{
- const x=create(a);await x.start();const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'B'});edit(x,'local');await x.flush();
- const reviewed=version(x.remote);const current=await read();await conditionalWrite(b,'sync-user',current,{...current,lembrete:'C'});await x.refresh();
- assert.equal(await x.resolve('local',reviewed),false);assert.equal((await read()).lembrete,'C');assert.equal(x.data.historico.length,2);
-});
+test('an uncertain reset must be checked before another reset is prepared',async()=>{const x=create(a);await x.start();const p=await prepare(x);await disableNetwork(a);await x.executeReset(p.id,confirmation);await enableNetwork(a);await assert.rejects(x.prepareReset(),/Verifique/);await x.checkReset();assert.equal(x.resetPlan.phase,'prepared');});
+test('an old empty reset snapshot cannot roll back a later generation',async()=>{const x=create(a);await x.start();const p1=await prepare(x);await x.executeReset(p1.id,confirmation);const oldEmpty=await read();const p2=await prepare(x);await x.executeReset(p2.id,confirmation);assert.equal((await read())._sync.generation,2);await assertFails(setDoc(ref(b),oldEmpty));});
+test('each tab resumes its own reset intent even when another tab prepares a plan',async()=>{const local=new Store(),ta=new Store(),tb=new Store(),x=create(a,local,ta),y=create(b,local,tb);await Promise.all([x.start(),y.start()]);const px=await prepare(x),py=await prepare(y);assert.equal(await x.executeReset(px.id,confirmation),true);assert.equal(await y.executeReset(py.id,confirmation),false);x.close();const loaded=create(a,local,ta);await loaded.start();assert.equal(loaded.resetPlan.id,px.id);assert.equal(loaded.resetPlan.phase,'committed');});

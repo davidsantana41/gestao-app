@@ -14,7 +14,9 @@
     "test:sync": "firebase emulators:exec --config firebase.emulator.json --project demo-appcar-isolation --only firestore \"node --test --test-concurrency=1 scripts/check-sync.mjs\"",
     "manual:sync": "node scripts/manual-sync.mjs",
     "test:manual-sync": "node scripts/check-manual-sync.mjs",
-    "manual:open": "node scripts/open-manual-sync.mjs"
+    "manual:open": "node scripts/open-manual-sync.mjs",
+    "manual:auto-reset": "node scripts/manual-sync.mjs --auto-reset",
+    "test:auto-reset": "node scripts/check-auto-reset.mjs"
   },
   "dependencies": {
     "firebase": "^13.2.0",

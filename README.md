@@ -36,7 +36,9 @@ O documento continua em `users/{uid}/appData/main`; a cópia local continua em `
 
 Carregar o painel não grava na nuvem. Na primeira leitura, a versão reconstruída guarda uma cópia dos dados locais e outra dos dados da nuvem no navegador, com os sufixos `-antes-reconstrucao` e `-nuvem-antes-reconstrucao`. Os registros antigos são mantidos como foram salvos; atualizar a tela não os recalcula.
 
-Alterações são copiadas para um journal próprio de cada aba antes da sincronização. As gravações usam transações que comparam a base confirmada com o documento atual: outro dispositivo não pode ser sobrescrito silenciosamente por um cliente atualizado. Se houver divergência, a edição local permanece pendente e o painel pede que o usuário escolha a versão a usar, preservando cópias das versões anteriores. O botão **Exportar backup** baixa os dados atuais em JSON; a exportação na aba **Privacidade** inclui também as cópias locais. Veja [sincronização segura e testes](docs/sincronizacao-segura.md).
+Alterações são copiadas para um journal próprio de cada aba antes da sincronização. O Firestore atualiza os painéis automaticamente por `onSnapshot`; transações combinam inclusões independentes por ID e pedem resolução somente para conflitos reais. Geração e revisão impedem reenvio de dados anteriores à reinicialização financeira. O botão **Exportar backup** baixa os dados atuais em JSON; a exportação na aba **Privacidade** inclui também as cópias locais. A reinicialização exige backup baixado, conferência do arquivo e confirmação digitada. Veja [sincronização automática, regras e reinicialização](docs/sincronizacao-automatica-reinicio.md).
+
+Esta melhoria foi preparada localmente: publicar o aplicativo requer autorização posterior e atualização coordenada das regras para o campo `_sync`. Não publicar apenas o app contra regras antigas. Nenhuma conta real foi reinicializada durante a implementação.
 
 Os formulários de turno permanecem preenchidos ao trocar de aba dentro do painel. Um formulário ainda não salvo não sobrevive ao fechamento ou recarregamento da página.
 

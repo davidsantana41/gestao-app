@@ -37,14 +37,22 @@ export const getDocFromServer = getDoc;
 export type Firestore = object;
 export const runTransaction = async (_db, action) => {
  let next;
- await action({get: getDoc, set: (_ref, value) => {next = value;}});
+ const result = await action({get: getDoc, set: (_ref, value) => {next = value;}});
  if (next) await setDoc({},next);
+ return result;
+};
+export const onSnapshot = (_ref, _options, accept, error) => {
+ const refresh = () => { void getDoc().then(snapshot => accept({...snapshot, metadata:{fromCache:false,hasPendingWrites:false}})).catch(error); };
+ const changed = event => { if (event.key === 'mock-remote') refresh(); };
+ window.addEventListener('mock-remote-change',refresh);window.addEventListener('storage',changed);refresh();
+ return () => {window.removeEventListener('mock-remote-change',refresh);window.removeEventListener('storage',changed);};
 };
 export const setDoc = async (_ref, dados) => {
  await new Promise(resolve => setTimeout(resolve, 75));
  if (window.__offline) throw new Error('Offline simulado');
  (window.__writes ??= []).push(JSON.parse(JSON.stringify(dados)));
  localStorage.setItem('mock-remote', JSON.stringify(dados));
+ window.dispatchEvent(new Event('mock-remote-change'));
 };
 `);
   fs.writeFileSync(path.join(app, 'package.json'), JSON.stringify({ private: true }));
@@ -168,6 +176,7 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
  change(field('Descrição'), 'Movimentação offline'); await tick();
  change(document.querySelector('.avulso-grid input[inputmode="decimal"]'), '5'); await tick();
  button('Registrar movimentação').click(); await new Promise(r => setTimeout(r, 350));
+ const memo=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(memo,'Lembrete offline em conflito');memo.dispatchEvent(new Event('input',{bubbles:true}));await tick();button('Salvar lembrete').click();await tick();
 })()`);
     const offline = await evaluate(`({ local: JSON.parse(localStorage.getItem('gestao-app-dados-v2-regression-test')), remote: JSON.parse(localStorage.getItem('mock-remote')), pending: localStorage.getItem('gestao-app-dados-v2-regression-test-pendente') })`);
     assert.equal(offline.local.historico.length, 4); assert.equal(offline.remote.historico.length, 3); assert.equal(offline.pending, 'true');
@@ -198,7 +207,7 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
     // independent tabs sharing localStorage retain both pending journals.
     await evaluate(`(async()=>{button('Registrar turno').click();await tick();change(field('Faturamento bruto (R$)'), '777');await tick();const remote=JSON.parse(localStorage.getItem('mock-remote'));remote.lembrete='Mudança remota';localStorage.setItem('mock-remote',JSON.stringify(remote));button('Verificar sincronização').click();await new Promise(r=>setTimeout(r,300));})()`);
     assert.equal(await evaluate(`field('Faturamento bruto (R$)').value`),'777');
-    assert.match(await evaluate('document.body.textContent'), /Escolha a versão dos seus dados/);
+    assert.equal(await evaluate("document.body.textContent.includes('Escolha a versão dos seus dados')"),false);
     const second = await send('Target.createTarget', {url: 'about:blank'});
     const attached = await send('Target.attachToTarget', {targetId: second.targetId, flatten:true});
     const other = async expression => {
@@ -208,8 +217,8 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
     };
     await send('Page.navigate',{url:'http://127.0.0.1:'+port},attached.sessionId);
     await other(`new Promise((resolve,reject)=>{const timer=setInterval(()=>{if(document.querySelector('textarea')){clearInterval(timer);resolve(true);}},50);setTimeout(()=>reject(new Error('Second tab timeout')),15000);})`);
-    await evaluate(`(async()=>{const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Rascunho A');input.dispatchEvent(new Event('input',{bubbles:true}));await tick();button('Salvar lembrete').click();await tick();})()`);
-    await other(`(async()=>{const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Rascunho B');input.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,100));[...document.querySelectorAll('button')].find(b=>b.textContent==='Salvar lembrete').click();await new Promise(r=>setTimeout(r,200));})()`);
+    await evaluate(`(async()=>{window.__offline=true;const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Rascunho A');input.dispatchEvent(new Event('input',{bubbles:true}));await tick();button('Salvar lembrete').click();await tick();})()`);
+    await other(`(async()=>{window.__offline=true;const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Rascunho B');input.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,100));[...document.querySelectorAll('button')].find(b=>b.textContent==='Salvar lembrete').click();await new Promise(r=>setTimeout(r,200));})()`);
     const journals=await evaluate(`Object.keys(localStorage).filter(k=>k.startsWith('gestao-app-dados-v2-regression-test-sync-')).map(k=>JSON.parse(localStorage.getItem(k))).filter(e=>e.pending).map(e=>e.data.lembrete)`);
     assert.ok(journals.includes('Rascunho A'));assert.ok(journals.includes('Rascunho B'));
     assert.equal(await evaluate(`field('Faturamento bruto (R$)').value`),'777');

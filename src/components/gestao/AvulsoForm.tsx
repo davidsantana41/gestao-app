@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { centavos, dataBR, dataLocal, moeda, numero, resumir, type DadosPersistidos, type Lancamento } from '@/lib/gestao';
 import { Campo, Valor } from './Campo';
 
-export default function AvulsoForm({ dados, onSalvar }: { dados: DadosPersistidos; onSalvar: (item: Lancamento) => boolean }) {
+export default function AvulsoForm({ dados, onSalvar }: { dados: DadosPersistidos; onSalvar: (item: Lancamento, base: DadosPersistidos) => boolean }) {
+  const [base] = useState(() => structuredClone(dados));
   const [form, setForm] = useState({ tipo: 'saida', data: dataLocal(), nome: '', valor: '', origem: 'principal' });
   const [erro, setErro] = useState('');
   const resumo = resumir(dados.historico);
@@ -24,7 +25,7 @@ export default function AvulsoForm({ dados, onSalvar }: { dados: DadosPersistido
         combustivel: 0, litros: 0, kmTrabalhado: 0, kmTotal: 0, reservaFevereiro: 0, reservaInvestimento: 0, reservaAcidente: 0,
         custosFixosDia: 0, detalheCustosFixosDia: {}, reservasDiariasDia: [],
         saidas: entrada ? [] : [{ id: crypto.randomUUID(), nome: form.nome.trim(), valor, origem: form.origem }],
-        totalDespesas: despesa, liquido: entrada ? valor : -despesa });
+        totalDespesas: despesa, liquido: entrada ? valor : -despesa }, base);
       if (salvo) setForm({ tipo: 'saida', data: dataLocal(), nome: '', valor: '', origem: 'principal' });
     }}>
       <label className="campo"><span>Tipo</span><select value={form.tipo} onChange={e => setForm({ ...form, tipo: e.currentTarget.value })}><option value="saida">Saída</option><option value="entrada">Entrada</option></select></label>

@@ -5,6 +5,7 @@ import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import Confirmacao from '@/components/Confirmacao';
 import VerificarEmail from '@/components/VerificarEmail';
 import Privacidade from '@/components/Privacidade';
+import ReiniciarDados from '@/components/ReiniciarDados';
 import AuthGate from '@/components/AuthGate';
 import TurnoForm from '@/components/gestao/TurnoForm';
 import CustosFixos from '@/components/gestao/CustosFixos';
@@ -14,9 +15,12 @@ import { auth } from '@/lib/firebase';
 import { useGestao } from '@/lib/useGestao';
 import { dataLocal, moeda, resumir, type Lancamento } from '@/lib/gestao';
 
-function Lembrete({ inicial, onSalvar }: { inicial: string; onSalvar: (texto: string) => void }) {
+function Lembrete({ inicial, onSalvar }: { inicial: string; onSalvar: (texto: string, base: string) => boolean }) {
+  const [base, setBase] = useState(inicial);
   const [texto, setTexto] = useState(inicial);
-  return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={texto} placeholder="Manutenção, compromissos, metas…" onChange={e => setTexto(e.currentTarget.value)} /></label><button className="botao secundario" type="button" onClick={() => onSalvar(texto)}>Salvar lembrete</button></section>;
+  const dirty = texto !== base;
+  const visivel = dirty ? texto : inicial;
+  return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label><button className="botao secundario" type="button" onClick={() => { if (onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button></section>;
 }
 
 export function Dashboard({ uid, email }: { uid: string; email: string | null }) {
@@ -34,7 +38,7 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
   const resumo = resumir(dados.historico);
   const editar = (item: Lancamento) => { setEditando(item); setFormVersao(v => v + 1); setAba('turno'); setMensagem(''); window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); };
   const excluir = (item: Lancamento) => {
-    const salvo = storage.atualizar(d => ({ ...d, historico: d.historico.filter(h => h.id !== item.id) }));
+    const salvo = storage.atualizar(d => ({ ...d, historico: d.historico.filter(h => h.id !== item.id) }), dados);
     if (!salvo) return;
     if (editando?.id === item.id) { setEditando(undefined); setFormVersao(v => v + 1); }
     setMensagem('Lançamento excluído. Relatórios atualizados.');
@@ -63,23 +67,23 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
         if (!versao || typeof versao === 'string') return null;
         const resumoVersao = resumir(versao.historico);
         return <div key={String(nome)}><h3>{String(nome)}</h3><p>{versao.historico.length} lançamentos</p><p>Saldo principal: <strong>{moeda(resumoVersao.liquido)}</strong></p></div>;
-      })}</div><p>As duas cópias serão guardadas neste navegador antes da troca. A quantidade de lançamentos não indica qual versão é mais recente. Você também pode exportar um backup dos dados em uso.</p><div className="acoes"><button type="button" className="botao primario" onClick={() => escolher('local')}>Usar dados deste navegador</button><button type="button" className="botao secundario" onClick={() => escolher('nuvem')}>Usar dados da nuvem</button></div></section>}
+      })}</div><p>As duas cópias serão guardadas neste navegador antes da troca. A quantidade de lançamentos não indica qual versão é mais recente. Você também pode exportar um backup dos dados em uso.</p>{storage.geracaoAnterior && <p className="mensagem aviso">Esta cópia pertence a uma geração anterior à reinicialização. Exporte-a se precisar consultar os registros antigos. Ela não pode substituir os dados atuais.</p>}<div className="acoes"><button type="button" className="botao primario" disabled={storage.geracaoAnterior} onClick={() => escolher('local')}>Usar dados deste navegador</button><button type="button" className="botao secundario" onClick={() => escolher('nuvem')}>Usar dados da nuvem</button></div></section>}
       <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque"><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
       <nav className="abas" aria-label="Seções do painel">{[['turno','Registrar turno'], ['relatorios','Histórico e relatórios'], ['configuracoes','Custos fixos'], ['privacidade','Privacidade']].map(([id, nome]) => <button type="button" key={id} aria-current={aba === id ? 'page' : undefined} onClick={() => setAba(id)}>{nome}</button>)}</nav>
       {mensagem && <p role="status" className="mensagem sucesso">{mensagem}</p>}
       <div hidden={aba !== 'turno'} className="pilha">
-        <TurnoForm key={`${editando?.id || 'novo'}-${formVersao}`} dados={dados} original={editando} onCancelar={() => { setEditando(undefined); setFormVersao(v => v + 1); }} onSalvar={item => {
+        <TurnoForm key={`${editando?.id || 'novo'}-${formVersao}-${dados._sync?.generation ?? 0}`} dados={dados} original={editando} onCancelar={() => { setEditando(undefined); setFormVersao(v => v + 1); }} onSalvar={(item, base) => {
           const salvo = storage.atualizar(d => ({ ...d, historico: editando ? d.historico.map(h => h.id === item.id ? item : h) : [item, ...d.historico],
-            reservasDiarias: editando ? d.reservasDiarias : (item.reservasDiariasDia ?? []).map(r => ({ ...r, valor: 0 })) }));
+            reservasDiarias: editando ? d.reservasDiarias : (item.reservasDiariasDia ?? []).map(r => ({ ...r, valor: 0 })) }), base);
           if (salvo) { setMensagem(editando ? 'Alterações salvas no turno original.' : 'Turno registrado com sucesso.'); setEditando(undefined); setFormVersao(v => v + 1); }
         }} />
-        <AvulsoForm key={`avulso-${recuperacaoVersao}`} dados={dados} onSalvar={item => { const salvo = storage.atualizar(d => ({ ...d, historico: [item, ...d.historico] })); if (salvo) setMensagem('Movimentação registrada.'); return salvo; }} />
-        <Lembrete key={`lembrete-${recuperacaoVersao}`} inicial={dados.lembrete} onSalvar={lembrete => { if (storage.atualizar(d => ({ ...d, lembrete }))) setMensagem('Lembrete salvo localmente. Confira o estado da sincronização.'); }} />
+        <AvulsoForm key={`avulso-${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} dados={dados} onSalvar={(item, base) => { const salvo = storage.atualizar(d => ({ ...d, historico: [item, ...d.historico] }), base); if (salvo) setMensagem('Movimentação registrada.'); return salvo; }} />
+        <Lembrete key={`lembrete-${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} inicial={dados.lembrete} onSalvar={(lembrete, base) => { const salvo = storage.atualizar(d => ({ ...d, lembrete }), { ...dados, lembrete: base }); if (salvo) setMensagem('Lembrete salvo localmente. Confira o estado da sincronização.'); return salvo; }} />
         <Historico itens={dados.historico.slice(0, 10)} onEditar={editar} onExcluir={pedirExclusao} />
       </div>
       {aba === 'relatorios' && <Relatorios dados={dados} mes={mes} onMes={setMes} onEditar={editar} onExcluir={pedirExclusao} />}
-      {aba === 'configuracoes' && <CustosFixos key={recuperacaoVersao} itens={dados.custosFixos} onSalvar={custosFixos => { if (storage.atualizar(d => ({ ...d, custosFixos }))) setMensagem('Custos salvos localmente. Os turnos antigos mantêm o rateio original.'); }} />}
-      {aba === 'privacidade' && <Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage.dadosNuvem} />}
+      {aba === 'configuracoes' && <CustosFixos key={`${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} itens={dados.custosFixos} onSalvar={(custosFixos, base) => { const salvo = storage.atualizar(d => ({ ...d, custosFixos }), { ...dados, custosFixos: base }); if (salvo) setMensagem('Custos salvos localmente. Os turnos antigos mantêm o rateio original.'); return salvo; }} />}
+      {aba === 'privacidade' && <div className="pilha"><Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage.dadosNuvem} /><ReiniciarDados uid={uid} email={email} plan={storage.reinicio} prepare={storage.prepararReinicio} backup={storage.backupReinicio} exported={storage.marcarBackupExportado} execute={storage.executarReinicio} check={storage.verificarReinicio} onComplete={() => { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); }} /></div>}
       <footer>APPCAR · Gestão do seu trabalho · Versão reconstruída</footer>
     </div>
   </main>;

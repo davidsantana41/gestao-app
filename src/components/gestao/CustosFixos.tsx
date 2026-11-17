@@ -2,9 +2,14 @@
 import { useState } from 'react';
 import { moeda, numero, type CustoFixoItem } from '@/lib/gestao';
 import { Campo, Valor } from './Campo';
+const rascunhoDe = (itens: CustoFixoItem[]) => itens.map(c => ({ ...c, texto: String(c.valorMensal).replace('.', ',') }));
 
-export default function CustosFixos({ itens, onSalvar }: { itens: CustoFixoItem[]; onSalvar: (itens: CustoFixoItem[]) => void }) {
-  const [rascunho, setRascunho] = useState(() => itens.map(c => ({ ...c, texto: String(c.valorMensal).replace('.', ',') })));
+export default function CustosFixos({ itens, onSalvar }: { itens: CustoFixoItem[]; onSalvar: (itens: CustoFixoItem[], base: CustoFixoItem[]) => boolean }) {
+  const [base, setBase] = useState(() => structuredClone(itens));
+  const [draft, setDraft] = useState(() => rascunhoDe(itens));
+  const dirty = JSON.stringify(draft) !== JSON.stringify(rascunhoDe(base));
+  const rascunho = dirty ? draft : rascunhoDe(itens);
+  const setRascunho = (next: typeof draft) => { if (!dirty) setBase(itens); setDraft(next); };
   const [erro, setErro] = useState('');
   return <section className="painel">
     <div className="titulo-linha"><div><p className="sobretitulo">PLANEJAMENTO</p><h2>Custos fixos e caixinhas</h2><p className="ajuda">O valor mensal é dividido pelos dias de trabalho do mês do turno.</p></div><button type="button" className="botao secundario" onClick={() => setRascunho([...rascunho, { id: crypto.randomUUID(), nome: '', valorMensal: 0, texto: '', cor: '#38bdf8' }])}>+ Adicionar custo</button></div>
@@ -16,7 +21,8 @@ export default function CustosFixos({ itens, onSalvar }: { itens: CustoFixoItem[
     {!rascunho.length && <p className="vazio">Nenhum custo fixo configurado.</p>}
     <div className="rodape-painel"><strong>Total mensal: {moeda(rascunho.reduce((s, c) => s + numero(c.texto), 0))}</strong><button type="button" className="botao primario" onClick={() => {
       if (rascunho.some(c => !c.nome.trim())) { setErro('Preencha o nome de cada custo.'); return; }
-      setErro(''); onSalvar(rascunho.map(({ texto, ...c }) => ({ ...c, nome: c.nome.trim(), valorMensal: numero(texto) })));
+      setErro(''); const novos = rascunho.map(({ texto, ...c }) => ({ ...c, nome: c.nome.trim(), valorMensal: numero(texto) }));
+      if (onSalvar(novos, dirty ? base : itens)) { setBase(novos); setDraft(rascunhoDe(novos)); }
     }}>Salvar custos fixos</button></div>
     {erro && <p role="alert" className="mensagem erro">{erro}</p>}
   </section>;

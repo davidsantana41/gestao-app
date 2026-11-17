@@ -1,5 +1,11 @@
 # Isolamento do Firestore
 
+As regras locais atuais também validam `_sync`, revisões e avanço de geração. Os
+nove cenários abaixo foram reexecutados e aprovados; os 49 testes de sincronização
+cobrem as novas transições. As regras publicadas não foram modificadas. Consulte
+[sincronização automática e reinicialização](sincronizacao-automatica-reinicio.md)
+antes de uma futura publicação coordenada.
+
 Os testes usam somente `demo-appcar-isolation` e `127.0.0.1:8088`.
 Não importam `src/lib/firebase.ts`, não exigem login e não acessam documentos reais.
 A autenticação é simulada pelo rules-unit-testing, incluindo provider e email_verified.

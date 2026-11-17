@@ -5,13 +5,16 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 
 const root = process.cwd();
-const dir = path.join(root, '.backups/manual-sync');
+const automatic = process.argv.includes('--auto-reset');
+const dir = path.join(root, automatic ? '.backups/auto-reset' : '.backups/manual-sync');
 const app = path.join(dir, 'app');
-const projectId = 'demo-appcar-manual';
-const url = 'http://127.0.0.1:3100';
+const projectId = automatic ? 'demo-appcar-auto-reset' : 'demo-appcar-manual';
+const appPort = automatic ? 3200 : 3100, firestorePort = automatic ? 8288 : 8188, authPort = automatic ? 9298 : 9198;
+const hubPort = automatic ? 4402 : 4401;
+const url = 'http://127.0.0.1:' + appPort;
 const children = [];
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const ports = [3100, 8188, 9198, 4401, 4501, 9151];
+const ports = [appPort, firestorePort, authPort, hubPort, automatic ? 4502 : 4501, automatic ? 9152 : 9151];
 
 async function freePort(port) {
   const server = net.createServer();
@@ -61,8 +64,8 @@ export const db = getFirestore(app);
 export const auth = getAuth(app);
 auth.languageCode = 'pt-BR';
 if (!existing) {
-  connectFirestoreEmulator(db, '127.0.0.1', 8188);
-  connectAuthEmulator(auth, 'http://127.0.0.1:9198', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', ${firestorePort});
+  connectAuthEmulator(auth, 'http://127.0.0.1:${authPort}', { disableWarnings: true });
   if (typeof window !== 'undefined' && sessionStorage.getItem('manual-firestore-offline') === 'true') void disableNetwork(db);
 }
 `);
@@ -75,7 +78,7 @@ export default function ManualNetwork() {
   const [busy, setBusy] = useState(false);
   useEffect(() => { setOffline(sessionStorage.getItem('manual-firestore-offline') === 'true'); }, []);
   return <aside style={{padding:'12px',background:'#fff1ad',color:'#111',border:'3px solid #a33'}} aria-label="Ambiente de teste isolado">
-    <strong>TESTE LOCAL APPCAR — projeto demo-appcar-manual — somente dados fictícios</strong>
+    <strong>TESTE LOCAL APPCAR — projeto ${projectId} — somente dados fictícios</strong>
     <p id="manual-network-state">Firestore local: {offline ? 'desconectado' : 'conectado'}</p>
     <button id="manual-network-toggle" type="button" disabled={busy} onClick={async () => {
       setBusy(true);
@@ -106,15 +109,15 @@ export default function ManualNetwork() {
   const env = { ...process.env, JAVA_HOME: javaHome, PATH: path.join(javaHome, 'bin') + ';' + process.env.PATH,
     CI: 'true', DEBUG: '', XDG_CONFIG_HOME: path.join(dir, 'cli-config'), FIREBASE_EMULATORS_PATH: path.join(root, '.backups/firebase-emulators') };
   const emulator = launch([path.join(root, 'node_modules/firebase-tools/lib/bin/firebase.js'), 'emulators:start',
-    '--config', 'firebase.manual.json', '--project', projectId, '--only', 'auth,firestore', '--non-interactive'], 'emulators.log', env);
+    '--config', automatic ? 'firebase.auto-reset.json' : 'firebase.manual.json', '--project', projectId, '--only', 'auth,firestore', '--non-interactive'], 'emulators.log', env);
   await ready(async () => {
     if (emulator.exitCode !== null) throw new Error('Emulator stopped');
-    const result = await fetch('http://127.0.0.1:4401/emulators');
+    const result = await fetch('http://127.0.0.1:' + hubPort + '/emulators');
     const body = await result.json();
-    return body.auth?.port === 9198 && body.firestore?.port === 8188;
+    return body.auth?.port === authPort && body.firestore?.port === firestorePort;
   });
   const email = 'sync-manual@example.test', password = 'APPCAR-teste-local-21!';
-  const authResponse = await fetch('http://127.0.0.1:9198/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-only-not-a-real-key', {
+  const authResponse = await fetch(`http://127.0.0.1:${authPort}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-only-not-a-real-key`, {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email,password,returnSecureToken:true})
   });
   const account = await authResponse.json();
@@ -123,15 +126,15 @@ export default function ManualNetwork() {
   const fields = { custosFixos:{arrayValue:{values:[]}}, reservasDiarias:{arrayValue:{values:[]}},
     nomeReserva1:{stringValue:'Reserva teste 1'}, nomeReserva2:{stringValue:'Reserva teste 2'}, nomeReserva3:{stringValue:'Reserva teste 3'},
     lembrete:{stringValue:''}, historico:{arrayValue:{values:[]}}, modoEscuro:{booleanValue:true} };
-  const seeded = await fetch(`http://127.0.0.1:8188/v1/projects/${projectId}/databases/(default)/documents/users/${account.localId}/appData/main`, {
+  const seeded = await fetch(`http://127.0.0.1:${firestorePort}/v1/projects/${projectId}/databases/(default)/documents/users/${account.localId}/appData/main`, {
     method:'PATCH',headers:{'Content-Type':'application/json',Authorization:'Bearer '+account.idToken},body:JSON.stringify({fields})
   });
   if (!seeded.ok) throw new Error('Local fixture seed failed: '+seeded.status);
-  const next = launch([path.join(root, 'node_modules/next/dist/bin/next'), 'dev', app, '--hostname','127.0.0.1','--port','3100'], 'next.log', env);
-  await ready(async () => { if (next.exitCode !== null) return false; const response=await fetch(url); return response.ok && (await response.text()).includes('demo-appcar-manual'); });
+  const next = launch([path.join(root, 'node_modules/next/dist/bin/next'), 'dev', app, '--hostname','127.0.0.1','--port',String(appPort)], 'next.log', env);
+  await ready(async () => { if (next.exitCode !== null) return false; const response=await fetch(url); return response.ok && (await response.text()).includes(projectId); });
   fs.writeFileSync(path.join(dir,'session.json'),JSON.stringify({projectId,url,email,password,uid:account.localId,startedAt:new Date().toISOString(),runnerPid:process.pid},null,2));
-  console.log('READY: '+url+' — demo-appcar-manual; Auth 9198; Firestore 8188.');
-  console.log('Fictitious account and instructions: .backups/manual-sync/session.json');
+  console.log('READY: '+url+' — '+projectId+'; Auth '+authPort+'; Firestore '+firestorePort+'.');
+  console.log('Fictitious account and instructions: '+path.join(dir,'session.json'));
   console.log('Keep this process running; Ctrl+C stops only its local services.');
   await new Promise((resolve,reject)=>{emulator.once('exit',()=>reject(new Error('Emulator stopped')));next.once('exit',()=>reject(new Error('Preview stopped')));});
 }

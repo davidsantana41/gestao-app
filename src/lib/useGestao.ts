@@ -1,15 +1,16 @@
 ﻿'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import { dadosPadrao, lerDados, type DadosPersistidos } from './gestao';
-import { SyncSession, version, type Recovery } from './syncSession';
+import { SyncSession, version, type Recovery, type ResetPlan, type ResetConfirmation } from './syncSession';
 
 export function useGestao(uid: string) {
   const session = useRef<SyncSession<DadosPersistidos> | null>(null);
   const [view, setView] = useState({ dados: null as DadosPersistidos | null,
     dadosNuvem: null as DadosPersistidos | null, status: 'Carregando seus dados…',
-    erro: '', conflito: false, versaoNuvem: version(null), recuperacoes: [] as Recovery<DadosPersistidos>[] });
+    erro: '', conflito: false, geracaoAnterior: false, versaoNuvem: version(null),
+    reinicio: null as ResetPlan | null, recuperacoes: [] as Recovery<DadosPersistidos>[] });
   useEffect(() => {
     const current = new SyncSession(db, uid, localStorage, sessionStorage, lerDados, dadosPadrao);
     session.current = current;
@@ -19,7 +20,7 @@ export function useGestao(uid: string) {
       try { if (current.remote) dadosNuvem = lerDados(current.remote); }
       catch { erro = 'A versão da nuvem tem formato inválido. Exporte as cópias antes de escolher uma versão.'; }
       setView({ dados: current.data, dadosNuvem,
-        status: current.status, erro, conflito: current.conflict,
+        status: current.status, erro, conflito: current.conflict, geracaoAnterior: current.oldGeneration, reinicio: current.resetPlan,
         versaoNuvem: version(current.remote), recuperacoes: current.recoveries });
     };
     void current.start();
@@ -32,10 +33,21 @@ export function useGestao(uid: string) {
     };
   }, [uid]);
   return { ...view,
-    atualizar: (transform: (data: DadosPersistidos) => DadosPersistidos) => session.current?.update(transform) ?? false,
+    atualizar: (transform: (data: DadosPersistidos) => DadosPersistidos, formBase?: DadosPersistidos) => session.current?.update(transform, formBase) ?? false,
     resolver: (source: 'local' | 'nuvem', expectedVersion?: string) => session.current?.resolve(source, expectedVersion),
     recuperar: (key: string) => session.current?.recover(key),
     tentarNovamente: () => session.current?.retry(),
+    prepararReinicio: async () => {
+      if (auth.currentUser?.uid !== uid || !session.current) throw new Error('Confirme sua sessão antes de preparar a reinicialização.');
+      return session.current.prepareReset();
+    },
+    backupReinicio: (id: string) => session.current?.resetBackup(id),
+    marcarBackupExportado: (id: string) => session.current?.markResetExported(id),
+    executarReinicio: async (id: string, confirmation: ResetConfirmation) => {
+      if (auth.currentUser?.uid !== uid || !session.current) throw new Error('A sessão mudou. Nenhum dado será reinicializado.');
+      return session.current.executeReset(id, confirmation);
+    },
+    verificarReinicio: () => session.current?.checkReset(),
     aguardar: async () => {
       const active = session.current;
       if (!active) throw new Error('Dados indisponíveis');

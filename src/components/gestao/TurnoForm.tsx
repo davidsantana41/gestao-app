@@ -17,9 +17,10 @@ function reduzir(form: TurnoFormulario, acao: Acao): TurnoFormulario {
 }
 
 export default function TurnoForm({ dados, original, onSalvar, onCancelar }: {
-  dados: DadosPersistidos; original?: Lancamento; onSalvar: (item: Lancamento) => void; onCancelar: () => void;
+  dados: DadosPersistidos; original?: Lancamento; onSalvar: (item: Lancamento, base: DadosPersistidos) => void; onCancelar: () => void;
 }) {
   const [form, dispatch] = useReducer(reduzir, undefined, () => novoFormulario(dados.reservasDiarias, original));
+  const [base] = useState(() => structuredClone(dados));
   const [erro, setErro] = useState('');
   const conta = calcularTurno(form, dados.custosFixos, original);
   const campo = (nome: Exclude<keyof TurnoFormulario, 'reservas'>, valor: string) => dispatch({ tipo: 'campo', campo: nome, valor });
@@ -32,7 +33,7 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar }: {
       setErro('Preencha o faturamento, o combustível ou uma reserva para salvar.'); return;
     }
     if (!original && dados.historico.some(h => h.tipo === 'turno' && h.data === form.data.split('-').reverse().join('/')) && !window.confirm('Já existe um turno nessa data. Deseja adicionar outro?')) return;
-    onSalvar(criarTurno(form, dados.custosFixos, original?.id ?? crypto.randomUUID(), original));
+    onSalvar(criarTurno(form, dados.custosFixos, original?.id ?? crypto.randomUUID(), original), base);
   };
   return <form onSubmit={salvar} className="turno-grid">
     <div className="pilha">
