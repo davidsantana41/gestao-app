@@ -25,6 +25,7 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
   const [aba, setAba] = useState('turno');
   const [editando, setEditando] = useState<Lancamento>();
   const [formVersao, setFormVersao] = useState(0);
+  const [recuperacaoVersao, setRecuperacaoVersao] = useState(0);
   const [mes, setMes] = useState('');
   const [mensagem, setMensagem] = useState('');
   const [confirmacao, setConfirmacao] = useState<{ titulo: string; descricao: string; confirmar: string; executar: () => void }>();
@@ -39,7 +40,10 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
     setMensagem('Lançamento excluído. Relatórios atualizados.');
   };
   const pedirExclusao = (item: Lancamento) => setConfirmacao({ titulo: 'Excluir lançamento?', descricao: `Registro de ${item.data}: ${item.descricao || 'Turno de trabalho'}. Ele será removido do histórico e os relatórios serão recalculados.`, confirmar: 'Excluir lançamento', executar: () => excluir(item) });
-  const escolher = (origem: 'local' | 'nuvem') => setConfirmacao({ titulo: origem === 'local' ? 'Usar a versão deste navegador?' : 'Usar a versão da nuvem?', descricao: origem === 'local' ? 'Os dados deste navegador substituirão a versão da nuvem. As versões não serão mescladas. Antes da troca, as duas cópias serão preservadas neste navegador.' : 'Os dados da nuvem substituirão os dados em uso neste navegador. As versões não serão mescladas. Antes da troca, as duas cópias serão preservadas neste navegador.', confirmar: 'Confirmar escolha', executar: () => { storage.resolver(origem); setEditando(undefined); setFormVersao(v => v + 1); } });
+  const escolher = (origem: 'local' | 'nuvem') => {
+    const versaoNuvem = storage.versaoNuvem;
+    setConfirmacao({ titulo: origem === 'local' ? 'Usar a versão deste navegador?' : 'Usar a versão da nuvem?', descricao: origem === 'local' ? 'Os dados deste navegador substituirão a versão da nuvem. As versões não serão mescladas. Antes da troca, as duas cópias serão preservadas neste navegador.' : 'Os dados da nuvem substituirão os dados em uso neste navegador. As versões não serão mescladas. Antes da troca, as duas cópias serão preservadas neste navegador.', confirmar: 'Confirmar escolha', executar: async () => { if (await storage.resolver(origem, versaoNuvem)) { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); } } });
+  };
   const exportar = () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `appcar-backup-${dataLocal()}.json`; link.click(); URL.revokeObjectURL(url);
@@ -53,6 +57,7 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
       <VerificarEmail />
       <div className="boas-vindas"><div><p className="sobretitulo">GESTÃO FINANCEIRA</p><h1>Seu painel de trabalho</h1><p>Acompanhe cada turno e dê um destino ao seu dinheiro.</p></div><button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button></div>
       <div className="barra-status"><span className="ponto" /><p role="status">{storage.status}</p><button type="button" className="botao discreto" onClick={storage.tentarNovamente}>Verificar sincronização</button></div>
+      {storage.recuperacoes.length > 0 && <section className="painel aviso"><h2>Cópias locais de outras sessões</h2><p>Há cópias com alterações pendentes neste navegador. Recuperar uma cópia preserva os dados atuais e exige comparação com a nuvem.</p>{storage.recuperacoes.map((copia, indice) => <button key={copia.key} type="button" className="botao secundario" onClick={() => setConfirmacao({ titulo: 'Recuperar cópia local?', descricao: 'Os dados atuais serão preservados antes da recuperação. Nenhuma gravação na nuvem será feita automaticamente.', confirmar: 'Recuperar cópia', executar: () => { if (storage.recuperar(copia.key)) { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); } } })}>Recuperar cópia {indice + 1} ({copia.data.historico.length} lançamentos)</button>)}</section>}
       {storage.erro && <p role="alert" className="mensagem erro">{storage.erro}</p>}
       {storage.conflito && <section className="painel aviso" aria-labelledby="titulo-conflito"><h2 id="titulo-conflito">Escolha a versão dos seus dados</h2><p>Este navegador e a nuvem têm dados diferentes. Compare as versões antes de escolher. Elas não serão mescladas.</p><div className="comparacao-versoes">{[['Neste navegador', dados], ['Na nuvem', storage.dadosNuvem]].map(([nome, versao]) => {
         if (!versao || typeof versao === 'string') return null;
@@ -68,12 +73,12 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
             reservasDiarias: editando ? d.reservasDiarias : (item.reservasDiariasDia ?? []).map(r => ({ ...r, valor: 0 })) }));
           if (salvo) { setMensagem(editando ? 'Alterações salvas no turno original.' : 'Turno registrado com sucesso.'); setEditando(undefined); setFormVersao(v => v + 1); }
         }} />
-        <AvulsoForm dados={dados} onSalvar={item => { const salvo = storage.atualizar(d => ({ ...d, historico: [item, ...d.historico] })); if (salvo) setMensagem('Movimentação registrada.'); return salvo; }} />
-        <Lembrete inicial={dados.lembrete} onSalvar={lembrete => { storage.atualizar(d => ({ ...d, lembrete })); setMensagem('Lembrete salvo.'); }} />
+        <AvulsoForm key={`avulso-${recuperacaoVersao}`} dados={dados} onSalvar={item => { const salvo = storage.atualizar(d => ({ ...d, historico: [item, ...d.historico] })); if (salvo) setMensagem('Movimentação registrada.'); return salvo; }} />
+        <Lembrete key={`lembrete-${recuperacaoVersao}`} inicial={dados.lembrete} onSalvar={lembrete => { if (storage.atualizar(d => ({ ...d, lembrete }))) setMensagem('Lembrete salvo localmente. Confira o estado da sincronização.'); }} />
         <Historico itens={dados.historico.slice(0, 10)} onEditar={editar} onExcluir={pedirExclusao} />
       </div>
       {aba === 'relatorios' && <Relatorios dados={dados} mes={mes} onMes={setMes} onEditar={editar} onExcluir={pedirExclusao} />}
-      {aba === 'configuracoes' && <CustosFixos itens={dados.custosFixos} onSalvar={custosFixos => { storage.atualizar(d => ({ ...d, custosFixos })); setMensagem('Custos atualizados. Os turnos antigos mantêm o rateio original.'); }} />}
+      {aba === 'configuracoes' && <CustosFixos key={recuperacaoVersao} itens={dados.custosFixos} onSalvar={custosFixos => { if (storage.atualizar(d => ({ ...d, custosFixos }))) setMensagem('Custos salvos localmente. Os turnos antigos mantêm o rateio original.'); }} />}
       {aba === 'privacidade' && <Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage.dadosNuvem} />}
       <footer>APPCAR · Gestão do seu trabalho · Versão reconstruída</footer>
     </div>

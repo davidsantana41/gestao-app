@@ -9,7 +9,12 @@
     "lint": "eslint",
     "test:dashboard": "node scripts/check-dashboard.mjs",
     "test:auth": "node scripts/check-auth.mjs",
-    "test": "node scripts/check-calculos.mjs"
+    "test:rules": "firebase emulators:exec --config firebase.emulator.json --project demo-appcar-isolation --only firestore \"node --test --test-concurrency=1 scripts/check-firestore-rules.mjs\"",
+    "test": "node scripts/check-calculos.mjs",
+    "test:sync": "firebase emulators:exec --config firebase.emulator.json --project demo-appcar-isolation --only firestore \"node --test --test-concurrency=1 scripts/check-sync.mjs\"",
+    "manual:sync": "node scripts/manual-sync.mjs",
+    "test:manual-sync": "node scripts/check-manual-sync.mjs",
+    "manual:open": "node scripts/open-manual-sync.mjs"
   },
   "dependencies": {
     "firebase": "^13.2.0",
@@ -18,6 +23,7 @@
     "react-dom": "19.3.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -25,6 +31,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
+    "firebase-tools": "^15.36.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
