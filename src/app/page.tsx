@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
+import Confirmacao from '@/components/Confirmacao';
+import VerificarEmail from '@/components/VerificarEmail';
+import Privacidade from '@/components/Privacidade';
 import AuthGate from '@/components/AuthGate';
 import TurnoForm from '@/components/gestao/TurnoForm';
 import CustosFixos from '@/components/gestao/CustosFixos';
@@ -24,31 +27,40 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
   const [formVersao, setFormVersao] = useState(0);
   const [mes, setMes] = useState('');
   const [mensagem, setMensagem] = useState('');
+  const [confirmacao, setConfirmacao] = useState<{ titulo: string; descricao: string; confirmar: string; executar: () => void }>();
   const [saindo, setSaindo] = useState(false);
   if (!dados) return <main className="acesso"><section className="painel"><div className="marca">A<span>APPCAR</span></div><h1>{storage.erro ? 'Vamos recuperar seus dados' : 'Carregando seu painel'}</h1><p role={storage.erro ? 'alert' : 'status'}>{storage.erro || storage.status}</p>{storage.erro && <button className="botao primario" onClick={storage.tentarNovamente}>Tentar novamente</button>}</section></main>;
   const resumo = resumir(dados.historico);
-  const editar = (item: Lancamento) => { setEditando(item); setFormVersao(v => v + 1); setAba('turno'); setMensagem(''); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const editar = (item: Lancamento) => { setEditando(item); setFormVersao(v => v + 1); setAba('turno'); setMensagem(''); window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); };
   const excluir = (item: Lancamento) => {
-    if (!window.confirm(`Excluir o lançamento de ${item.data}?\n\n${item.descricao || 'Turno de trabalho'}\nEsta ação remove o registro do histórico.`)) return;
-    storage.atualizar(d => ({ ...d, historico: d.historico.filter(h => h.id !== item.id) }));
+    const salvo = storage.atualizar(d => ({ ...d, historico: d.historico.filter(h => h.id !== item.id) }));
+    if (!salvo) return;
     if (editando?.id === item.id) { setEditando(undefined); setFormVersao(v => v + 1); }
     setMensagem('Lançamento excluído. Relatórios atualizados.');
   };
+  const pedirExclusao = (item: Lancamento) => setConfirmacao({ titulo: 'Excluir lançamento?', descricao: `Registro de ${item.data}: ${item.descricao || 'Turno de trabalho'}. Ele será removido do histórico e os relatórios serão recalculados.`, confirmar: 'Excluir lançamento', executar: () => excluir(item) });
+  const escolher = (origem: 'local' | 'nuvem') => setConfirmacao({ titulo: origem === 'local' ? 'Usar a versão deste navegador?' : 'Usar a versão da nuvem?', descricao: origem === 'local' ? 'Os dados deste navegador substituirão a versão da nuvem. As versões não serão mescladas. Antes da troca, as duas cópias serão preservadas neste navegador.' : 'Os dados da nuvem substituirão os dados em uso neste navegador. As versões não serão mescladas. Antes da troca, as duas cópias serão preservadas neste navegador.', confirmar: 'Confirmar escolha', executar: () => { storage.resolver(origem); setEditando(undefined); setFormVersao(v => v + 1); } });
   const exportar = () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `appcar-backup-${dataLocal()}.json`; link.click(); URL.revokeObjectURL(url);
   };
   return <main className={`app ${dados.modoEscuro ? 'escuro' : 'claro'}`}>
+    {confirmacao && <Confirmacao titulo={confirmacao.titulo} descricao={confirmacao.descricao} confirmar={confirmacao.confirmar} onCancelar={() => setConfirmacao(undefined)} onConfirmar={() => { confirmacao.executar(); setConfirmacao(undefined); }} />}
     <header className="cabecalho"><div className="container cabecalho-conteudo"><div className="marca">A<span>APPCAR<small>Seu trabalho, suas contas.</small></span></div><div className="usuario"><span>{email}</span><button type="button" className="botao discreto" onClick={() => storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro }))}>{dados.modoEscuro ? 'Modo claro' : 'Modo escuro'}</button><button type="button" className="botao secundario" disabled={saindo} onClick={async () => {
       setSaindo(true); try { await storage.aguardar(); await signOut(auth); } catch { setMensagem('A sincronização ainda está pendente. Tente sair novamente em instantes.'); } finally { setSaindo(false); }
     }}>{saindo ? 'Aguarde…' : 'Sair'}</button></div></div></header>
     <div className="container conteudo">
+      <VerificarEmail />
       <div className="boas-vindas"><div><p className="sobretitulo">GESTÃO FINANCEIRA</p><h1>Seu painel de trabalho</h1><p>Acompanhe cada turno e dê um destino ao seu dinheiro.</p></div><button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button></div>
       <div className="barra-status"><span className="ponto" /><p role="status">{storage.status}</p><button type="button" className="botao discreto" onClick={storage.tentarNovamente}>Verificar sincronização</button></div>
       {storage.erro && <p role="alert" className="mensagem erro">{storage.erro}</p>}
-      {storage.conflito && <section className="painel aviso"><h2>Escolha a versão dos seus dados</h2><p>Há alterações neste navegador que ainda não estão na nuvem. As duas cópias serão guardadas antes da escolha.</p><div className="acoes"><button type="button" className="botao primario" onClick={() => { if (window.confirm('Usar as alterações deste navegador na nuvem?')) storage.resolver('local'); }}>Usar dados deste navegador</button><button type="button" className="botao secundario" onClick={() => storage.resolver('nuvem')}>Usar dados da nuvem</button></div></section>}
+      {storage.conflito && <section className="painel aviso" aria-labelledby="titulo-conflito"><h2 id="titulo-conflito">Escolha a versão dos seus dados</h2><p>Este navegador e a nuvem têm dados diferentes. Compare as versões antes de escolher. Elas não serão mescladas.</p><div className="comparacao-versoes">{[['Neste navegador', dados], ['Na nuvem', storage.dadosNuvem]].map(([nome, versao]) => {
+        if (!versao || typeof versao === 'string') return null;
+        const resumoVersao = resumir(versao.historico);
+        return <div key={String(nome)}><h3>{String(nome)}</h3><p>{versao.historico.length} lançamentos</p><p>Saldo principal: <strong>{moeda(resumoVersao.liquido)}</strong></p></div>;
+      })}</div><p>As duas cópias serão guardadas neste navegador antes da troca. A quantidade de lançamentos não indica qual versão é mais recente. Você também pode exportar um backup dos dados em uso.</p><div className="acoes"><button type="button" className="botao primario" onClick={() => escolher('local')}>Usar dados deste navegador</button><button type="button" className="botao secundario" onClick={() => escolher('nuvem')}>Usar dados da nuvem</button></div></section>}
       <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque"><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
-      <nav className="abas" aria-label="Seções do painel">{[['turno','Registrar turno'], ['relatorios','Histórico e relatórios'], ['configuracoes','Custos fixos']].map(([id, nome]) => <button type="button" key={id} aria-current={aba === id ? 'page' : undefined} onClick={() => setAba(id)}>{nome}</button>)}</nav>
+      <nav className="abas" aria-label="Seções do painel">{[['turno','Registrar turno'], ['relatorios','Histórico e relatórios'], ['configuracoes','Custos fixos'], ['privacidade','Privacidade']].map(([id, nome]) => <button type="button" key={id} aria-current={aba === id ? 'page' : undefined} onClick={() => setAba(id)}>{nome}</button>)}</nav>
       {mensagem && <p role="status" className="mensagem sucesso">{mensagem}</p>}
       <div hidden={aba !== 'turno'} className="pilha">
         <TurnoForm key={`${editando?.id || 'novo'}-${formVersao}`} dados={dados} original={editando} onCancelar={() => { setEditando(undefined); setFormVersao(v => v + 1); }} onSalvar={item => {
@@ -58,10 +70,11 @@ export function Dashboard({ uid, email }: { uid: string; email: string | null })
         }} />
         <AvulsoForm dados={dados} onSalvar={item => { const salvo = storage.atualizar(d => ({ ...d, historico: [item, ...d.historico] })); if (salvo) setMensagem('Movimentação registrada.'); return salvo; }} />
         <Lembrete inicial={dados.lembrete} onSalvar={lembrete => { storage.atualizar(d => ({ ...d, lembrete })); setMensagem('Lembrete salvo.'); }} />
-        <Historico itens={dados.historico.slice(0, 10)} onEditar={editar} onExcluir={excluir} />
+        <Historico itens={dados.historico.slice(0, 10)} onEditar={editar} onExcluir={pedirExclusao} />
       </div>
-      {aba === 'relatorios' && <Relatorios dados={dados} mes={mes} onMes={setMes} onEditar={editar} onExcluir={excluir} />}
+      {aba === 'relatorios' && <Relatorios dados={dados} mes={mes} onMes={setMes} onEditar={editar} onExcluir={pedirExclusao} />}
       {aba === 'configuracoes' && <CustosFixos itens={dados.custosFixos} onSalvar={custosFixos => { storage.atualizar(d => ({ ...d, custosFixos })); setMensagem('Custos atualizados. Os turnos antigos mantêm o rateio original.'); }} />}
+      {aba === 'privacidade' && <Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage.dadosNuvem} />}
       <footer>APPCAR · Gestão do seu trabalho · Versão reconstruída</footer>
     </div>
   </main>;

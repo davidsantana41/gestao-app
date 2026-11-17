@@ -19,3 +19,4 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 // Exportamos o Banco de Dados (Firestore) e o Sistema de Login (Auth) para usar no aplicativo
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+auth.languageCode = 'pt-BR';

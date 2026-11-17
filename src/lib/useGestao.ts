@@ -19,6 +19,7 @@ export function useGestao(uid: string) {
   const [dados, setDados] = useState<DadosPersistidos | null>(null);
   const [status, setStatus] = useState('Carregando seus dados…');
   const [erro, setErro] = useState('');
+  const [dadosNuvem, setDadosNuvem] = useState<DadosPersistidos | null>(null);
   const [conflito, setConflito] = useState(false);
   const [revisao, setRevisao] = useState(0);
   const atual = useRef<DadosPersistidos | null>(null);
@@ -49,6 +50,7 @@ export function useGestao(uid: string) {
         if (!ativo) return;
         const cloud = snapshot.exists() ? lerDados(snapshot.data()) : null;
         remoto.current = cloud;
+        setDadosNuvem(cloud);
         const pendente = localStorage.getItem(chave + '-pendente') === 'true';
         const divergiu = Boolean(local && cloud && JSON.stringify(local) !== JSON.stringify(cloud));
         const escolhido = (pendente || divergiu) && local ? local : cloud ?? local ?? dadosPadrao();
@@ -112,20 +114,28 @@ export function useGestao(uid: string) {
 
   const resolver = (origem: 'local' | 'nuvem') => {
     if (!atual.current) return;
-    if (remoto.current) guardar(remoto.current, '-antes-resolver-nuvem');
-    guardar(atual.current, '-antes-resolver-local');
+    try {
+      if (remoto.current) guardar(remoto.current, '-antes-resolver-nuvem');
+      guardar(atual.current, '-antes-resolver-local');
+      if (origem === 'nuvem' && remoto.current) {
+        guardar(remoto.current);
+        localStorage.removeItem(chave + '-pendente');
+      }
+    } catch {
+      setErro('Não foi possível preservar as cópias neste navegador. Exporte um backup e libere espaço antes de escolher.');
+      return;
+    }
+    setErro('');
     setConflito(false);
     nuvem.current = true;
     if (origem === 'nuvem' && remoto.current) {
       atual.current = remoto.current;
-      guardar(remoto.current);
-      localStorage.removeItem(chave + '-pendente');
       setDados(remoto.current);
       setStatus('Versão da nuvem carregada. A cópia local anterior foi preservada.');
     } else atualizar(d => d);
   };
 
-  return { dados, status, erro, conflito, atualizar, resolver,
+  return { dados, dadosNuvem, status, erro, conflito, atualizar, resolver,
     tentarNovamente: async () => { try { await prazo(fila.current); setErro(''); setRevisao(r => r + 1); } catch { setErro('A sincronização está pendente. Seu backup local foi mantido.'); } },
     aguardar: () => prazo(fila.current),
   };

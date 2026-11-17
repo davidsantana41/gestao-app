@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:dashboard": "node scripts/check-dashboard.mjs",
+    "test:auth": "node scripts/check-auth.mjs",
     "test": "node scripts/check-calculos.mjs"
   },
   "dependencies": {

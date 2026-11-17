@@ -166,10 +166,24 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
     await send('Page.reload', {}, sessionId);
     await new Promise(resolve => setTimeout(resolve, 400));
     await evaluate(`new Promise((resolve, reject) => { const start = Date.now(); const timer = setInterval(() => { if (document.body.textContent.includes('Escolha a versão dos seus dados')) { clearInterval(timer); resolve(true); } else if (Date.now() - start > 10000) { clearInterval(timer); reject(new Error('Conflito local/nuvem não detectado')); } }, 50); })`);
-    await evaluate(`(async () => { [...document.querySelectorAll('button')].find(b => b.textContent.includes('Usar dados deste navegador')).click(); await new Promise(r => setTimeout(r, 400)); })()`);
+    await evaluate(`(async () => { const tick = () => new Promise(r => setTimeout(r, 50)); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); [...document.querySelectorAll('button')].find(b => b.textContent.includes('Usar dados deste navegador')).click(); await tick(); button('Cancelar').click(); await tick(); if (document.querySelector('dialog')) throw new Error('Cancelar deve fechar o diálogo'); if (!document.body.textContent.includes('Escolha a versão dos seus dados')) throw new Error('Cancelar deve preservar o conflito'); button('Usar dados deste navegador').click(); await tick(); if (!document.querySelector('dialog[open]')) throw new Error('Confirmação deve abrir como modal'); button('Confirmar escolha').click(); await new Promise(r => setTimeout(r, 400)); })()`);
     const recovered = await evaluate(`JSON.parse(localStorage.getItem('mock-remote'))`);
     assert.equal(recovered.historico.length, 4);
     assert.deepEqual(recovered.historico.at(-1), legacy);
+    await evaluate(`(async () => {
+      localStorage.setItem('gestao-app-dados-v2-another-user', JSON.stringify({private: 'other-account'}));
+      const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text);
+      button('Privacidade').click(); await new Promise(r => setTimeout(r, 100));
+      window.__createObjectURL = URL.createObjectURL;
+      URL.createObjectURL = blob => { window.__exportedPrivacy = blob.text(); return window.__createObjectURL(blob); };
+      button('Baixar meus dados pessoais').click();
+    })()`);
+    const privacy = JSON.parse(await evaluate('window.__exportedPrivacy'));
+    assert.equal(privacy.conta.identificador, 'regression-test');
+    assert.equal(privacy.dadosEmUso.historico.length, 4);
+    assert.ok(privacy.copiasNesteNavegador['-antes-resolver-local']);
+    assert.equal(JSON.stringify(privacy).includes('other-account'), false, 'Export must isolate local backups by account.');
+    assert.equal(await evaluate("document.querySelector('a[href^=mailto]').href.includes('davidangelosantana%40gmail.com') || document.querySelector('a[href^=mailto]').href.includes('davidangelosantana@gmail.com')"), true);
     assert.deepEqual(errors, []);
     console.log('PASS: Next.js real: nomes, R$ 38,00, R$ 3,99/L, 10,30 km/L, excluir/cancelar/recriar, vírgula decimal, navegação preserva formulário, salvar/editar sem duplicar, histórico legado intacto e layout móvel.');
     console.log('PASS: custos preservam histórico; retirada de reserva; falha de rede mantém backup local; recarregar detecta conflito; recuperar sincroniza sem perder registros.');
