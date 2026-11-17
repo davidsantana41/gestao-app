@@ -1,142 +1,48 @@
-'use client';
+﻿'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { useEffect, useRef, useState } from 'react';
 import { db } from './firebase';
 import { dadosPadrao, lerDados, type DadosPersistidos } from './gestao';
-
-async function prazo<T>(operacao: Promise<T>) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([operacao, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('A conexão demorou mais que o esperado.')), 10000);
-    })]);
-  } finally { clearTimeout(timer); }
-}
+import { SyncSession, version, type Recovery } from './syncSession';
 
 export function useGestao(uid: string) {
-  const chave = `gestao-app-dados-v2-${uid}`;
-  const [dados, setDados] = useState<DadosPersistidos | null>(null);
-  const [status, setStatus] = useState('Carregando seus dados…');
-  const [erro, setErro] = useState('');
-  const [dadosNuvem, setDadosNuvem] = useState<DadosPersistidos | null>(null);
-  const [conflito, setConflito] = useState(false);
-  const [revisao, setRevisao] = useState(0);
-  const atual = useRef<DadosPersistidos | null>(null);
-  const remoto = useRef<DadosPersistidos | null>(null);
-  const nuvem = useRef(false);
-  const fila = useRef(Promise.resolve());
-  const versao = useRef(0);
-  const montado = useRef(true);
-
-  const guardar = useCallback((valor: DadosPersistidos, sufixo = '') => {
-    localStorage.setItem(chave + sufixo, JSON.stringify(valor));
-  }, [chave]);
-
+  const session = useRef<SyncSession<DadosPersistidos> | null>(null);
+  const [view, setView] = useState({ dados: null as DadosPersistidos | null,
+    dadosNuvem: null as DadosPersistidos | null, status: 'Carregando seus dados…',
+    erro: '', conflito: false, versaoNuvem: version(null), recuperacoes: [] as Recovery<DadosPersistidos>[] });
   useEffect(() => {
-    let ativo = true;
-    montado.current = true;
-    const carregar = async () => {
-      let local: DadosPersistidos | null = null;
-      try {
-        const texto = localStorage.getItem(chave);
-        if (texto) {
-          local = lerDados(JSON.parse(texto));
-          if (!localStorage.getItem(chave + '-antes-reconstrucao')) localStorage.setItem(chave + '-antes-reconstrucao', texto);
-        }
-      } catch { /* O documento remoto ainda pode ser carregado. */ }
-      try {
-        const snapshot = await prazo(getDoc(doc(db, 'users', uid, 'appData', 'main')));
-        if (!ativo) return;
-        const cloud = snapshot.exists() ? lerDados(snapshot.data()) : null;
-        remoto.current = cloud;
-        setDadosNuvem(cloud);
-        const pendente = localStorage.getItem(chave + '-pendente') === 'true';
-        const divergiu = Boolean(local && cloud && JSON.stringify(local) !== JSON.stringify(cloud));
-        const escolhido = (pendente || divergiu) && local ? local : cloud ?? local ?? dadosPadrao();
-        if (cloud && !localStorage.getItem(chave + '-nuvem-antes-reconstrucao')) guardar(cloud, '-nuvem-antes-reconstrucao');
-        atual.current = escolhido;
-        nuvem.current = !divergiu;
-        setDados(escolhido);
-        setConflito(divergiu);
-        setErro('');
-        setStatus(divergiu ? 'Há alterações locais pendentes. Escolha qual versão deseja usar.' : 'Dados carregados.');
-        // Carregar a tela nunca grava nem substitui o documento na nuvem.
-      } catch (falha) {
-        if (!ativo) return;
-        nuvem.current = false;
-        if (local) {
-          atual.current = local;
-          setDados(local);
-          setStatus('Modo local: suas alterações ficam neste navegador até sincronizar.');
-        } else {
-          setErro('Não foi possível recuperar seus dados. Verifique a conexão e tente novamente.');
-        }
-        console.warn('Carregamento do armazenamento:', falha);
-      }
+    const current = new SyncSession(db, uid, localStorage, sessionStorage, lerDados, dadosPadrao);
+    session.current = current;
+    current.onChange = () => {
+      let dadosNuvem: DadosPersistidos | null = null;
+      let erro = current.error;
+      try { if (current.remote) dadosNuvem = lerDados(current.remote); }
+      catch { erro = 'A versão da nuvem tem formato inválido. Exporte as cópias antes de escolher uma versão.'; }
+      setView({ dados: current.data, dadosNuvem,
+        status: current.status, erro, conflito: current.conflict,
+        versaoNuvem: version(current.remote), recuperacoes: current.recoveries });
     };
-    void carregar();
-    return () => { ativo = false; montado.current = false; };
-  }, [uid, chave, guardar, revisao]);
-
-  const atualizar = useCallback((transformar: (dados: DadosPersistidos) => DadosPersistidos) => {
-    if (!atual.current) return false;
-    const proximo = transformar(atual.current);
-    // Falha local interrompe a alteração: não afirmamos que um dado sem backup foi salvo.
-    try {
-      guardar(proximo);
-      localStorage.setItem(chave + '-pendente', 'true');
-    } catch {
-      setErro('Não foi possível salvar neste navegador. Exporte um backup e libere espaço antes de continuar.');
-      return false;
-    }
-    atual.current = proximo;
-    setDados(proximo);
-    const minhaVersao = ++versao.current;
-    if (!nuvem.current) {
-      setStatus('Alterações salvas neste navegador; sincronização pendente.');
-      return true;
-    }
-    setStatus('Salvando…');
-    fila.current = fila.current.then(async () => {
-      try {
-        await setDoc(doc(db, 'users', uid, 'appData', 'main'), proximo);
-        if (minhaVersao === versao.current) {
-          localStorage.removeItem(chave + '-pendente');
-          if (montado.current) setStatus('Tudo salvo na nuvem e neste navegador.');
-        }
-      } catch {
-        if (montado.current) setStatus('Backup local salvo. A sincronização precisa ser tentada novamente.');
-      }
-    });
-    return true;
-  }, [guardar, chave, uid]);
-
-  const resolver = (origem: 'local' | 'nuvem') => {
-    if (!atual.current) return;
-    try {
-      if (remoto.current) guardar(remoto.current, '-antes-resolver-nuvem');
-      guardar(atual.current, '-antes-resolver-local');
-      if (origem === 'nuvem' && remoto.current) {
-        guardar(remoto.current);
-        localStorage.removeItem(chave + '-pendente');
-      }
-    } catch {
-      setErro('Não foi possível preservar as cópias neste navegador. Exporte um backup e libere espaço antes de escolher.');
-      return;
-    }
-    setErro('');
-    setConflito(false);
-    nuvem.current = true;
-    if (origem === 'nuvem' && remoto.current) {
-      atual.current = remoto.current;
-      setDados(remoto.current);
-      setStatus('Versão da nuvem carregada. A cópia local anterior foi preservada.');
-    } else atualizar(d => d);
-  };
-
-  return { dados, dadosNuvem, status, erro, conflito, atualizar, resolver,
-    tentarNovamente: async () => { try { await prazo(fila.current); setErro(''); setRevisao(r => r + 1); } catch { setErro('A sincronização está pendente. Seu backup local foi mantido.'); } },
-    aguardar: () => prazo(fila.current),
+    void current.start();
+    const online = () => { void current.retry(); };
+    const storage = (event: StorageEvent) => { if (event.key === current.prefix) void current.refresh(); };
+    window.addEventListener('online', online);
+    window.addEventListener('storage', storage);
+    return () => {
+      current.close(); window.removeEventListener('online', online); window.removeEventListener('storage', storage);
+    };
+  }, [uid]);
+  return { ...view,
+    atualizar: (transform: (data: DadosPersistidos) => DadosPersistidos) => session.current?.update(transform) ?? false,
+    resolver: (source: 'local' | 'nuvem', expectedVersion?: string) => session.current?.resolve(source, expectedVersion),
+    recuperar: (key: string) => session.current?.recover(key),
+    tentarNovamente: () => session.current?.retry(),
+    aguardar: async () => {
+      const active = session.current;
+      if (!active) throw new Error('Dados indisponíveis');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { await Promise.race([active.wait(), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Sincronização pendente')), 10000);
+      })]); } finally { clearTimeout(timer); }
+    },
   };
 }

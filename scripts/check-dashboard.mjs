@@ -23,6 +23,7 @@ export default function TestPage() {
   fs.writeFileSync(path.join(app, 'src/lib/firebase.ts'), 'export const auth = {}, db = {};');
   let hook = fs.readFileSync('src/lib/useGestao.ts', 'utf8').replace("from 'firebase/firestore'", "from './testStorage'");
   fs.writeFileSync(path.join(app, 'src/lib/useGestao.ts'), hook);
+  fs.writeFileSync(path.join(app, 'src/lib/syncSession.ts'), fs.readFileSync('src/lib/syncSession.ts','utf8').replace("from 'firebase/firestore'", "from './testStorage'"));
   fs.writeFileSync(path.join(app, 'src/lib/testStorage.ts'), `
 import { dadosPadrao } from './gestao';
 const legado = { id: 'legado-1', data: '13/11/2026', diaSemana: 'sexta-feira', tipo: 'turno', descricao: 'Lançamento preservado', faturamentoBruto: 300, combustivel: 40, litros: 10, kmTrabalhado: 100, kmTotal: 110, reservaFevereiro: 2, reservaInvestimento: 3, reservaAcidente: 4.18, custosFixosDia: 15, detalheCustosFixosDia: { '1': 15 }, reservasDiariasDia: [{ id: 'reserva-legada', nome: 'Reserva anterior', valor: 7.5 }], saidas: [], totalDespesas: 71.68, liquido: 228.32 };
@@ -31,6 +32,13 @@ export const doc = () => ({});
 export const getDoc = async () => {
  if (window.__offline) throw new Error('Offline simulado');
  return { exists: () => true, data: () => JSON.parse(localStorage.getItem('mock-remote') || JSON.stringify(seed)) };
+};
+export const getDocFromServer = getDoc;
+export type Firestore = object;
+export const runTransaction = async (_db, action) => {
+ let next;
+ await action({get: getDoc, set: (_ref, value) => {next = value;}});
+ if (next) await setDoc({},next);
 };
 export const setDoc = async (_ref, dados) => {
  await new Promise(resolve => setTimeout(resolve, 75));
@@ -163,6 +171,7 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
 })()`);
     const offline = await evaluate(`({ local: JSON.parse(localStorage.getItem('gestao-app-dados-v2-regression-test')), remote: JSON.parse(localStorage.getItem('mock-remote')), pending: localStorage.getItem('gestao-app-dados-v2-regression-test-pendente') })`);
     assert.equal(offline.local.historico.length, 4); assert.equal(offline.remote.historico.length, 3); assert.equal(offline.pending, 'true');
+    await evaluate(`const cloud=JSON.parse(localStorage.getItem('mock-remote'));cloud.lembrete='Alterado em outro dispositivo';localStorage.setItem('mock-remote',JSON.stringify(cloud));`);
     await send('Page.reload', {}, sessionId);
     await new Promise(resolve => setTimeout(resolve, 400));
     await evaluate(`new Promise((resolve, reject) => { const start = Date.now(); const timer = setInterval(() => { if (document.body.textContent.includes('Escolha a versão dos seus dados')) { clearInterval(timer); resolve(true); } else if (Date.now() - start > 10000) { clearInterval(timer); reject(new Error('Conflito local/nuvem não detectado')); } }, 50); })`);
@@ -184,6 +193,28 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
     assert.ok(privacy.copiasNesteNavegador['-antes-resolver-local']);
     assert.equal(JSON.stringify(privacy).includes('other-account'), false, 'Export must isolate local backups by account.');
     assert.equal(await evaluate("document.querySelector('a[href^=mailto]').href.includes('davidangelosantana%40gmail.com') || document.querySelector('a[href^=mailto]').href.includes('davidangelosantana@gmail.com')"), true);
+    await evaluate(`window.button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);window.tick=()=>new Promise(r=>setTimeout(r,80));window.field=text=>[...document.querySelectorAll('label')].find(l=>l.querySelector('span')?.textContent===text)?.querySelector('input');window.change=(input,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};`);
+    // Browser-level regression: remote refresh preserves an unsaved form, and
+    // independent tabs sharing localStorage retain both pending journals.
+    await evaluate(`(async()=>{button('Registrar turno').click();await tick();change(field('Faturamento bruto (R$)'), '777');await tick();const remote=JSON.parse(localStorage.getItem('mock-remote'));remote.lembrete='Mudança remota';localStorage.setItem('mock-remote',JSON.stringify(remote));button('Verificar sincronização').click();await new Promise(r=>setTimeout(r,300));})()`);
+    assert.equal(await evaluate(`field('Faturamento bruto (R$)').value`),'777');
+    assert.match(await evaluate('document.body.textContent'), /Escolha a versão dos seus dados/);
+    const second = await send('Target.createTarget', {url: 'about:blank'});
+    const attached = await send('Target.attachToTarget', {targetId: second.targetId, flatten:true});
+    const other = async expression => {
+      const result=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},attached.sessionId);
+      if(result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+      return result.result.value;
+    };
+    await send('Page.navigate',{url:'http://127.0.0.1:'+port},attached.sessionId);
+    await other(`new Promise((resolve,reject)=>{const timer=setInterval(()=>{if(document.querySelector('textarea')){clearInterval(timer);resolve(true);}},50);setTimeout(()=>reject(new Error('Second tab timeout')),15000);})`);
+    await evaluate(`(async()=>{const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Rascunho A');input.dispatchEvent(new Event('input',{bubbles:true}));await tick();button('Salvar lembrete').click();await tick();})()`);
+    await other(`(async()=>{const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Rascunho B');input.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,100));[...document.querySelectorAll('button')].find(b=>b.textContent==='Salvar lembrete').click();await new Promise(r=>setTimeout(r,200));})()`);
+    const journals=await evaluate(`Object.keys(localStorage).filter(k=>k.startsWith('gestao-app-dados-v2-regression-test-sync-')).map(k=>JSON.parse(localStorage.getItem(k))).filter(e=>e.pending).map(e=>e.data.lembrete)`);
+    assert.ok(journals.includes('Rascunho A'));assert.ok(journals.includes('Rascunho B'));
+    assert.equal(await evaluate(`field('Faturamento bruto (R$)').value`),'777');
+    await send('Target.closeTarget',{targetId:second.targetId});
+    console.log('PASS: duas abas preservam seus próprios lembretes pendentes; atualização remota mantém formulário não salvo.');
     assert.deepEqual(errors, []);
     console.log('PASS: Next.js real: nomes, R$ 38,00, R$ 3,99/L, 10,30 km/L, excluir/cancelar/recriar, vírgula decimal, navegação preserva formulário, salvar/editar sem duplicar, histórico legado intacto e layout móvel.');
     console.log('PASS: custos preservam histórico; retirada de reserva; falha de rede mantém backup local; recarregar detecta conflito; recuperar sincroniza sem perder registros.');
