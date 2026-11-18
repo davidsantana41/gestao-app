@@ -2,6 +2,48 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function owner(userId) { return request.auth != null && request.auth.uid == userId; }
+    function signedIn() { return request.auth != null; }
+    function nonAnonymous() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+    function nonAnonymousOwner(userId) { return owner(userId) && nonAnonymous(); }
+    function emailMatches(value) {
+      return nonAnonymous()
+        && request.auth.token.email is string && value == request.auth.token.email.lower();
+    }
+    function inviteFields(data) {
+      return data.keys().hasOnly(['ownerUid', 'email', 'status', 'partnerUid', 'createdAt', 'updatedAt', 'acceptedAt', 'revokedAt'])
+        && data.ownerUid is string && data.email is string && data.status is string
+        && data.createdAt is string && data.updatedAt is string;
+    }
+    function noPartner(data) {
+      return !data.keys().hasAny(['partnerUid']) || data.partnerUid == null;
+    }
+    function pendingInvite(data, ownerUid) {
+      return inviteFields(data) && data.ownerUid == ownerUid && data.status == 'pending'
+        && data.email == data.email.lower() && noPartner(data) && !data.keys().hasAny(['acceptedAt', 'revokedAt']);
+    }
+    function activeInvite(data, ownerUid) {
+      return inviteFields(data) && data.ownerUid == ownerUid && data.status == 'active'
+        && data.partnerUid is string && data.partnerUid != ownerUid
+        && data.acceptedAt is string && !data.keys().hasAny(['revokedAt']);
+    }
+    function revokedInvite(data, ownerUid) {
+      return inviteFields(data) && data.ownerUid == ownerUid && data.status == 'revoked'
+        && noPartner(data) && data.revokedAt is string;
+    }
+    function activePartner(userId) {
+      return nonAnonymous()
+        && exists(/databases/$(database)/documents/shareInvites/$(userId))
+        && get(/databases/$(database)/documents/shareInvites/$(userId)).data.status == 'active'
+        && get(/databases/$(database)/documents/shareInvites/$(userId)).data.partnerUid == request.auth.uid;
+    }
+    function partnerCanReadInvite(ownerUid) {
+      return nonAnonymous() && (
+        (resource.data.status == 'pending' && emailMatches(resource.data.email))
+        || (resource.data.status == 'active' && resource.data.partnerUid == request.auth.uid)
+      );
+    }
     function allowedFields(data) {
       return data.keys().hasOnly(['custosFixos', 'reservasDiarias', 'nomeReserva1', 'nomeReserva2', 'nomeReserva3', 'lembrete', 'historico', 'modoEscuro', '_sync']);
     }
@@ -36,9 +78,28 @@ service cloud.firestore {
           || resetShape(after, before._sync.generation + 1));
     }
     match /users/{userId}/appData/main {
-      allow read: if owner(userId);
+      allow read: if owner(userId) || activePartner(userId);
       allow create: if owner(userId) && allowedFields(request.resource.data) && validCreate(request.resource.data);
       allow update: if owner(userId) && allowedFields(request.resource.data) && validUpdate(resource.data, request.resource.data);
+      allow delete: if false;
+    }
+    match /shareInvites/{ownerUid} {
+      allow read: if nonAnonymousOwner(ownerUid) || partnerCanReadInvite(ownerUid);
+      allow create: if nonAnonymousOwner(ownerUid) && pendingInvite(request.resource.data, ownerUid);
+      allow update: if (
+        nonAnonymousOwner(ownerUid) && (
+          (resource.data.status == 'pending' && revokedInvite(request.resource.data, ownerUid))
+          || (resource.data.status == 'active' && revokedInvite(request.resource.data, ownerUid))
+          || (resource.data.status == 'revoked' && pendingInvite(request.resource.data, ownerUid))
+        )
+      ) || (
+        signedIn() && request.auth.token.email_verified == true
+        && resource.data.status == 'pending' && emailMatches(resource.data.email)
+        && request.auth.uid != ownerUid && activeInvite(request.resource.data, ownerUid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'partnerUid', 'acceptedAt', 'updatedAt'])
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.ownerUid == resource.data.ownerUid
+      );
       allow delete: if false;
     }
     match /{document=**} { allow read, write: if false; }

@@ -1,18 +1,18 @@
 import { dataISO, decimal, moeda, resultado, resumir, type DadosPersistidos, type Lancamento } from '@/lib/gestao';
 
-export function Historico({ itens, onEditar, onExcluir }: { itens: Lancamento[]; onEditar: (item: Lancamento) => void; onExcluir: (item: Lancamento) => void }) {
+export function Historico({ itens, onEditar, onExcluir }: { itens: Lancamento[]; onEditar?: (item: Lancamento) => void; onExcluir?: (item: Lancamento) => void }) {
   return <section className="painel"><div className="titulo-linha"><h2>Histórico de lançamentos</h2><span className="selo">{itens.length} registros</span></div>
     {itens.length > 0 && <p className="dica-rolagem">Deslize a tabela para ver todas as colunas.</p>}
     {!itens.length ? <p className="vazio">Seus lançamentos salvos aparecerão aqui.</p> : <div className="tabela-scroll" tabIndex={0} role="region" aria-label="Histórico de lançamentos, role para ver todas as colunas"><table><caption className="somente-leitor">Histórico de lançamentos</caption><thead><tr><th scope="col">Data</th><th scope="col">Lançamento</th><th scope="col">Faturamento / valor</th><th scope="col">Despesas e reservas</th><th scope="col">Saldo principal</th><th scope="col">Ações</th></tr></thead><tbody>{itens.map(h => {
       const r = resultado(h);
       return <tr key={h.id}><td>{h.data}<small>{h.diaSemana}</small></td><td>{h.tipo === 'turno' ? 'Turno de trabalho' : h.descricao}<small>{h.tipo === 'turno' ? (h.reservasDiariasDia ?? []).map(r => `${r.nome || 'Reserva antiga'}: ${moeda(r.valor)}`).join(' · ') : h.tipo === 'avulso_entrada' ? 'Entrada avulsa' : 'Saída avulsa'}</small></td>
         <td>{moeda(h.tipo === 'avulso_saida' ? (h.saidas ?? []).reduce((s, r) => s + r.valor, 0) : h.faturamentoBruto)}</td><td>{moeda(r.despesas)}</td><td className={r.liquido < 0 ? 'texto-perigo' : 'texto-verde'}>{moeda(r.liquido)}</td>
-        <td><div className="acoes">{h.tipo === 'turno' && <button type="button" className="botao discreto" onClick={() => onEditar(h)}>Editar</button>}<button type="button" className="botao discreto perigo" onClick={() => onExcluir(h)}>Excluir</button></div></td></tr>;
+        <td><div className="acoes">{onEditar && h.tipo === 'turno' && <button type="button" className="botao discreto" onClick={() => onEditar(h)}>Editar</button>}{onExcluir && <button type="button" className="botao discreto perigo" onClick={() => onExcluir(h)}>Excluir</button>}</div></td></tr>;
     })}</tbody></table></div>}
   </section>;
 }
 
-export default function Relatorios({ dados, mes, onMes, onEditar, onExcluir }: { dados: DadosPersistidos; mes: string; onMes: (mes: string) => void; onEditar: (item: Lancamento) => void; onExcluir: (item: Lancamento) => void }) {
+export default function Relatorios({ dados, mes, onMes, onEditar, onExcluir }: { dados: DadosPersistidos; mes: string; onMes: (mes: string) => void; onEditar?: (item: Lancamento) => void; onExcluir?: (item: Lancamento) => void }) {
   const itens = dados.historico.filter(h => !mes || dataISO(h.data).startsWith(mes));
   const r = resumir(itens);
   const acumulado = resumir(dados.historico);

@@ -19,6 +19,90 @@ function record(value: unknown): RecordData {
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Documento inválido');
   return value as RecordData;
 }
+export function normalizeStorageNamespace(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+export function storagePrefix(uid: string, storageNamespace?: string) {
+  const namespace = normalizeStorageNamespace(storageNamespace || uid);
+  return `gestao-app-dados-v2-${namespace}`;
+}
+export function legacyStoragePrefix(uid: string) {
+  return `gestao-app-dados-v2-${uid}`;
+}
+export function storagePrefixes(uid: string, storageNamespace?: string) {
+  const current = storagePrefix(uid, storageNamespace), legacy = legacyStoragePrefix(uid);
+  return current === legacy ? [current] : [current, legacy];
+}
+function namespaceMarker(prefix: string) { return prefix + '-owner'; }
+function assertNamespaceAvailable(local: LocalStore, prefix: string, uid: string) {
+  const marker = local.getItem(namespaceMarker(prefix));
+  if (marker !== null && marker !== uid) throw new Error('Namespace local pertence a outra conta');
+  if (marker === uid) return;
+  const keys: string[] = [];
+  for (let i = 0; i < local.length; i++) {
+    const key = local.key(i);
+    if (key && key !== namespaceMarker(prefix) && (key === prefix || key.startsWith(prefix + '-'))) keys.push(key);
+  }
+  const branches = keys.filter(key => key.startsWith(prefix + '-sync-'));
+  if (keys.length && !branches.length) throw new Error('Namespace local sem identificação segura');
+  for (const key of branches) {
+    try {
+      const envelope = JSON.parse(local.getItem(key) || 'null');
+      if (envelope?.uid !== uid) throw new Error('Namespace local pertence a outra conta');
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('outra conta')) throw error;
+      throw new Error('Namespace local sem identificação segura');
+    }
+  }
+}
+function copyStoragePrefix(store: LocalStore, from: string, to: string) {
+  const keys: string[] = [];
+  for (let i = 0; i < store.length; i++) {
+    const key = store.key(i);
+    if (key && (key === from || key.startsWith(from + '-'))) keys.push(key);
+  }
+  for (const key of keys) {
+    const source = store.getItem(key);
+    if (source === null) continue;
+    const target = to + key.slice(from.length);
+    let value = source;
+    if (key === from + '-session' && source.startsWith(from + '-sync-')) value = to + source.slice(from.length);
+    const existing = store.getItem(target);
+    if (existing !== null) {
+      if (existing !== value) throw new Error('Colisão entre cópias locais antigas e atuais');
+      continue;
+    }
+    store.setItem(target, value);
+    if (store.getItem(target) !== value) throw new Error('Não foi possível confirmar a cópia local');
+  }
+}
+function copySessionStorageKeys(store: Pick<LocalStore, 'getItem' | 'setItem'>, from: string, to: string) {
+  for (const suffix of ['-session', '-reset-session']) {
+    const sourceKey = from + suffix, source = store.getItem(sourceKey);
+    if (source === null) continue;
+    const targetKey = to + suffix;
+    let value = source;
+    if (suffix === '-session' && source.startsWith(from + '-sync-')) value = to + source.slice(from.length);
+    const existing = store.getItem(targetKey);
+    if (existing !== null) {
+      if (existing !== value) throw new Error('Colisão entre sessões locais antigas e atuais');
+      continue;
+    }
+    store.setItem(targetKey, value);
+    if (store.getItem(targetKey) !== value) throw new Error('Não foi possível confirmar a sessão local');
+  }
+}
+function migrateLegacyCache(local: LocalStore, tab: Pick<LocalStore, 'getItem' | 'setItem'>, uid: string, current: string) {
+  const legacy = legacyStoragePrefix(uid);
+  if (legacy === current) return;
+  assertNamespaceAvailable(local, current, uid);
+  copyStoragePrefix(local, legacy, current);
+  copySessionStorageKeys(tab, legacy, current);
+  if (local.getItem(namespaceMarker(current)) === null) {
+    local.setItem(namespaceMarker(current), uid);
+    if (local.getItem(namespaceMarker(current)) !== uid) throw new Error('Não foi possível confirmar o namespace local');
+  }
+}
 export function metadata(value: unknown): SyncMetadata {
   const sync = record(value)._sync;
   if (!sync) return { generation: 0, revision: 0 };
@@ -116,6 +200,10 @@ export interface SyncTransport {
   listen?(accept: (value: unknown) => void, offline: () => void): () => void;
   reset?(plan: ResetPlan): Promise<unknown>;
 }
+export interface SyncSessionOptions {
+  readOnly?: boolean;
+  storageNamespace?: string;
+}
 export async function resetTransaction(db: Firestore, uid: string, plan: ResetPlan): Promise<RecordData> {
   if (plan.uid !== uid) throw new Error('Conta incorreta');
   const ref = doc(db, 'users', uid, 'appData', 'main');
@@ -159,10 +247,19 @@ export class SyncSession<T extends object> {
   private defaults: () => T;
   private transport: SyncTransport;
   readonly uid: string;
+  readonly readOnly: boolean;
+  private migrationWarning = '';
   constructor(db: Firestore, uid: string, local: LocalStore, tab: Pick<LocalStore, 'getItem' | 'setItem'>,
-    decode: (value: unknown) => T, defaults: () => T, transport?: SyncTransport) {
+    decode: (value: unknown) => T, defaults: () => T, transport?: SyncTransport, options: SyncSessionOptions = {}) {
     this.db = db; this.uid = uid; this.local = local; this.tab = tab; this.decode = decode; this.defaults = defaults;
-    this.prefix = `gestao-app-dados-v2-${uid}`;
+    this.readOnly = options.readOnly === true;
+    const candidate = storagePrefix(uid, options.storageNamespace);
+    let prefix = candidate;
+    if (!options.storageNamespace && candidate !== legacyStoragePrefix(uid)) {
+      try { migrateLegacyCache(local, tab, uid, candidate); }
+      catch { prefix = legacyStoragePrefix(uid); this.migrationWarning = 'A cópia local antiga foi preservada, mas não foi possível confirmar a migração. Compare as cópias antes de continuar.'; }
+    }
+    this.prefix = prefix;
     this.branch = this.prefix + '-sync-' + crypto.randomUUID();
     const ref = doc(db, 'users', uid, 'appData', 'main');
     this.transport = transport ?? {
@@ -227,6 +324,9 @@ export class SyncSession<T extends object> {
     if (this.closed) return;
     if (this.data) { this.status = 'Salvo localmente. Verificando a nuvem…'; this.emit(); }
     await this.refresh();
+    if (!this.closed && this.migrationWarning) {
+      this.conflict = true; this.error = this.migrationWarning; this.status = 'Conflito identificado. A cópia local antiga foi preservada.'; this.emit();
+    }
     if (!this.closed && this.transport.listen) this.stopListening = this.transport.listen(cloud => {
       if (this.task) this.deferred = { value: cloud }; else this.accept(cloud);
     }, () => { if (!this.closed) { this.status = this.conflict ? 'Conflito identificado.' : 'Salvo localmente. Sem conexão confirmada.'; this.emit(); } });
@@ -267,7 +367,7 @@ export class SyncSession<T extends object> {
       this.conflict = false; this.oldGeneration = false; this.error = '';
       this.status = pending ? 'Salvo localmente.' : 'Salvo na nuvem.';
       this.emit();
-      if (pending) queueMicrotask(() => { void this.flush(); });
+      if (pending && !this.readOnly) queueMicrotask(() => { void this.flush(); });
     } catch (error) {
       if (error instanceof SyncConflict) {
         this.conflict = true;
@@ -286,7 +386,7 @@ export class SyncSession<T extends object> {
     catch { this.status = 'Salvo localmente. Sem confirmação da nuvem.'; if (!this.data) this.error = 'Não foi possível recuperar seus dados. Verifique a conexão e tente novamente.'; this.emit(); }
   }
   update(transform: (data: T) => T, formBase?: T) {
-    if (!this.data || this.closed || this.resetPlan && ['executing', 'uncertain'].includes(this.resetPlan.phase)) return false;
+    if (this.readOnly || !this.data || this.closed || this.resetPlan && ['executing', 'uncertain'].includes(this.resetPlan.phase)) return false;
     try {
       const proposal = transform(structuredClone(formBase ?? this.data));
       let next = proposal, conflict = this.conflict;
@@ -303,7 +403,7 @@ export class SyncSession<T extends object> {
   }
   flush(): Promise<void> {
     if (this.task) return this.task;
-    if (this.closed || !this.pending || this.conflict || !this.known || !this.data || this.resetPlan && ['executing', 'uncertain'].includes(this.resetPlan.phase)) return Promise.resolve();
+    if (this.readOnly || this.closed || !this.pending || this.conflict || !this.known || !this.data || this.resetPlan && ['executing', 'uncertain'].includes(this.resetPlan.phase)) return Promise.resolve();
     this.task = this.drain().finally(() => {
       this.task = null;
       const deferred = this.deferred; this.deferred = null;
@@ -336,7 +436,7 @@ export class SyncSession<T extends object> {
     }
   }
   async resolve(source: 'local' | 'nuvem', expectedVersion = version(this.remote)) {
-    if (!this.data || this.task || this.closed) return false;
+    if (this.readOnly || !this.data || this.task || this.closed) return false;
     const sequence = this.editSequence;
     try {
       const cloud = await readWithTimeout(() => this.transport.read());
@@ -358,6 +458,7 @@ export class SyncSession<T extends object> {
     } catch { this.error = 'Não foi possível confirmar a escolha. As cópias locais foram mantidas.'; this.emit(); return false; }
   }
   recover(key: string) {
+    if (this.readOnly) return false;
     const entry = this.recoveries.find(item => item.key === key);
     if (!entry || !this.data || this.task) return false;
     try {
@@ -368,6 +469,7 @@ export class SyncSession<T extends object> {
     } catch { this.error = 'Não foi possível preservar as cópias.'; this.emit(); return false; }
   }
   async prepareReset(startedOn = '2026-11-17') {
+    if (this.readOnly) throw new Error('Esta conta está disponível somente para visualização.');
     if (!this.data || this.task || this.closed || this.resetPlan && ['executing', 'uncertain'].includes(this.resetPlan.phase)
       || !/^\d{4}-\d{2}-\d{2}$/.test(startedOn)) throw new Error('Verifique a sincronização e qualquer reinicialização pendente antes de preparar outra.');
     const sequence = this.editSequence, cloud = await readWithTimeout(() => this.transport.read());
@@ -388,6 +490,7 @@ export class SyncSession<T extends object> {
     this.savePlan(plan); this.emit(); return plan;
   }
   resetBackup(id: string): unknown {
+    if (this.readOnly) throw new Error('Esta conta está disponível somente para visualização.');
     if (this.resetPlan?.id !== id) throw new Error('Preparação inválida');
     const text = this.local.getItem(this.resetPlan.backupKey); if (!text) throw new Error('Backup não encontrado');
     const backup = JSON.parse(text);
@@ -395,9 +498,11 @@ export class SyncSession<T extends object> {
     return backup;
   }
   markResetExported(id: string) {
+    if (this.readOnly) throw new Error('Esta conta está disponível somente para visualização.');
     this.resetBackup(id); this.savePlan({ ...this.resetPlan!, exported: true }); this.emit();
   }
   async executeReset(id: string, confirmation: ResetConfirmation) {
+    if (this.readOnly) throw new Error('Esta conta está disponível somente para visualização.');
     const plan = this.resetPlan;
     if (!plan || plan.id !== id || this.task || this.closed || !this.data) return false;
     if (confirmation.uid !== this.uid || confirmation.phrase !== 'REINICIAR MINHA CONTA' || !confirmation.backupVerified || !plan.exported)
@@ -427,6 +532,7 @@ export class SyncSession<T extends object> {
     this.error = ''; this.status = 'Salvo na nuvem. Nova geração financeira iniciada.'; this.emit();
   }
   async checkReset() {
+    if (this.readOnly) return false;
     const plan = this.resetPlan; if (!plan || this.task) return false;
     const cloud = await readWithTimeout(() => this.transport.read());
     if (metadata(cloud).resetId === plan.id) { this.finishReset(cloud); return true; }
@@ -435,6 +541,6 @@ export class SyncSession<T extends object> {
     return false;
   }
   async retry() { await this.refresh(); if (!this.conflict) await this.flush(); }
-  async wait() { await this.flush(); if (this.pending || this.conflict || this.resetPlan && ['executing', 'uncertain'].includes(this.resetPlan.phase)) throw new Error('Sincronização pendente'); }
+  async wait() { if (this.readOnly) return; await this.flush(); if (this.pending || this.conflict || this.resetPlan && ['executing', 'uncertain'].includes(this.resetPlan.phase)) throw new Error('Sincronização pendente'); }
   close() { this.closed = true; this.stopListening?.(); this.onChange = () => {}; }
 }

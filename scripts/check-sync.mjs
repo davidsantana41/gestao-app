@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { initializeTestEnvironment, assertFails } from '@firebase/rules-unit-testing';
 import { doc, getDocFromServer, setDoc, disableNetwork, enableNetwork, onSnapshot } from 'firebase/firestore';
-import { SyncSession, conditionalWrite, resetTransaction, SyncConflict, mergeFinancial, version, readWithTimeout } from '../src/lib/syncSession.ts';
+import { SyncSession, conditionalWrite, resetTransaction, SyncConflict, mergeFinancial, version, readWithTimeout, legacyStoragePrefix, storagePrefix } from '../src/lib/syncSession.ts';
 import { resumir } from '../src/lib/gestao.ts';
 if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8088') throw new Error('Local Emulator required; no production fallback');
 const projectId='demo-appcar-isolation';
@@ -58,6 +58,53 @@ test('empty document supports two concurrent first financial additions',async()=
 test('legacy pending copy with unknown base is never uploaded blindly',async()=>{const local=new Store();local.setItem('gestao-app-dados-v2-sync-user',JSON.stringify({...initial(),lembrete:'old'}));const x=create(a,local);await x.start();assert.equal(x.conflict,true);assert.equal((await read()).lembrete,'');});
 test('clean legacy copy with an acknowledged marker follows the server automatically',async()=>{const local=new Store();local.setItem('gestao-app-dados-v2-sync-user',JSON.stringify(initial()));local.setItem('gestao-app-dados-v2-sync-user-pendente','false');const base=await read();await conditionalWrite(b,'sync-user',base,{...base,lembrete:'new'});const x=create(a,local);await x.start();assert.equal(x.data.lembrete,'new');assert.equal(x.conflict,false);});
 test('a read timeout rejects without adopting a late response',async()=>{const delayed=gate();await assert.rejects(readWithTimeout(()=>delayed.promise,5),/demorou/);delayed.release(initial());});
+
+test('shared read-only session keeps a separate cache and never writes or resets',async()=>{
+ let writes=0, resets=0;
+ const local=new Store(),tab=new Store();
+ const viewer=new SyncSession(a,'sync-user',local,tab,value=>structuredClone(value),initial,{
+   read:async()=>initial(), write:async()=>{writes++;return initial();}, reset:async()=>{resets++;return initial();}
+ },{readOnly:true,storageNamespace:'shared-viewer-sync-user'});
+ await viewer.start();
+ assert.equal(viewer.readOnly,true);
+ assert.equal(viewer.prefix,'gestao-app-dados-v2-shared-viewer-sync-user');
+ assert.equal(viewer.update(d=>({...d,lembrete:'não pode'})),false);
+ await viewer.flush();
+ assert.equal(await viewer.resolve('nuvem'),false);
+ assert.equal(viewer.recover('missing'),false);
+ await assert.rejects(viewer.prepareReset(),/somente para visualização/);
+ assert.equal(await viewer.checkReset(),false);
+ assert.equal(writes,0); assert.equal(resets,0);
+ viewer.close();
+});
+
+test('legacy cache with a special UID migrates idempotently without deleting the source',async()=>{
+ const uid='uid.with.dot',legacy=legacyStoragePrefix(uid),current=storagePrefix(uid),local=new Store(),tab=new Store();
+ const branch=legacy+'-sync-legacy-branch',data={...initial(),lembrete:'pendente antigo'};
+ local.setItem(legacy,JSON.stringify(data)); local.setItem(legacy+'-pendente','true');
+ local.setItem(branch,JSON.stringify({format:2,uid,base:null,data,pending:true,known:false})); tab.setItem(legacy+'-session',branch);
+ const transport={read:async()=>initial(),write:async()=>initial(),reset:async()=>initial()};
+ const first=new SyncSession(a,uid,local,tab,value=>structuredClone(value),initial,transport);
+ assert.equal(local.getItem(current),JSON.stringify(data));
+ assert.equal(local.getItem(legacy),JSON.stringify(data));
+ assert.equal(tab.getItem(current+'-session'),current+'-sync-legacy-branch');
+ const afterFirst=[...local.values.keys()].sort();
+ const second=new SyncSession(a,uid,local,tab,value=>structuredClone(value),initial,transport);
+ assert.deepEqual([...local.values.keys()].sort(),afterFirst);
+ assert.equal(second.prefix,current); assert.equal(first.prefix,current);
+ first.close(); second.close();
+});
+
+test('cache namespace collision falls back to the legacy key without overwriting another account',async()=>{
+ const uid='uid.with.dot',other='uid_with_dot',legacy=legacyStoragePrefix(uid),current=storagePrefix(uid),local=new Store(),tab=new Store();
+ local.setItem(current+'-sync-other',JSON.stringify({format:2,uid:other,base:null,data:initial(),pending:true,known:false}));
+ local.setItem(legacy,JSON.stringify({...initial(),lembrete:'cópia antiga'}));
+ const session=new SyncSession(a,uid,local,tab,value=>structuredClone(value),initial,{read:async()=>initial(),write:async()=>initial(),reset:async()=>initial()});
+ assert.equal(session.prefix,legacy);
+ assert.equal(local.getItem(current+'-sync-other')?.includes('uid_with_dot'),true);
+ assert.equal(local.getItem(legacy),JSON.stringify({...initial(),lembrete:'cópia antiga'}));
+ session.close();
+});
 
 test('reset preparation creates a complete backup without changing data',async()=>{const local=new Store(),x=create(a,local);await x.start();const plan=await x.prepareReset();assert.equal(plan.remoteCount,1);assert.equal(plan.localCount,1);const backup=x.resetBackup(plan.id);assert.equal(backup.uid,'sync-user');assert.deepEqual(backup.remote,initial());assert.deepEqual(await read(),initial());assert.equal(plan.exported,false);});
 test('reset rejects missing confirmation, wrong UID and unexported backup',async()=>{const x=create(a);await x.start();const plan=await x.prepareReset();await assert.rejects(x.executeReset(plan.id,confirmation),/backup/);x.markResetExported(plan.id);await assert.rejects(x.executeReset(plan.id,{...confirmation,uid:'other'}),/Confirme/);await assert.rejects(x.executeReset(plan.id,{...confirmation,phrase:'SIM'}),/Confirme/);assert.equal((await read()).historico.length,1);});

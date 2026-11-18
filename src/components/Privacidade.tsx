@@ -5,22 +5,25 @@ import { useState } from 'react';
 import { auth } from '@/lib/firebase';
 import { baixarJson, privacidade } from '@/lib/privacidade';
 import { dataLocal, type DadosPersistidos } from '@/lib/gestao';
+import { storagePrefixes } from '@/lib/syncSession';
 
-export default function Privacidade({ uid, email, dados, dadosNuvem }: {
-  uid: string; email: string | null; dados: DadosPersistidos; dadosNuvem: DadosPersistidos | null;
+export default function Privacidade({ uid, email, dados, dadosNuvem, readOnly = false }: {
+  uid: string; email: string | null; dados: DadosPersistidos; dadosNuvem: DadosPersistidos | null; readOnly?: boolean;
 }) {
   const [erro, setErro] = useState('');
   function exportar() {
     try {
       const usuario = auth.currentUser;
-      const chave = `gestao-app-dados-v2-${uid}`;
       const copias: Record<string, unknown> = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const item = localStorage.key(i);
-        if (item && (item === chave || item.startsWith(chave + '-'))) {
-          const texto = localStorage.getItem(item);
-          try { copias[item.slice(chave.length) || 'principal'] = JSON.parse(texto || 'null'); }
-          catch { copias[item.slice(chave.length) || 'principal'] = texto; }
+      for (const [indice, chave] of storagePrefixes(uid).entries()) {
+        for (let i = 0; i < localStorage.length; i++) {
+          const item = localStorage.key(i);
+          if (item && (item === chave || item.startsWith(chave + '-'))) {
+            const texto = localStorage.getItem(item), sufixo = item.slice(chave.length) || 'principal';
+            const nome = indice === 0 && copias[sufixo] === undefined ? sufixo : `legado${sufixo}`;
+            try { copias[nome] = JSON.parse(texto || 'null'); }
+            catch { copias[nome] = texto; }
+          }
         }
       }
       baixarJson(`appcar-meus-dados-${dataLocal()}.json`, {
@@ -33,6 +36,7 @@ export default function Privacidade({ uid, email, dados, dadosNuvem }: {
       setErro('');
     } catch { setErro('Não foi possível exportar seus dados. Verifique as permissões de armazenamento e download do navegador.'); }
   }
+  if (readOnly) return <section className="painel pilha" aria-labelledby="privacidade-titulo"><h2 id="privacidade-titulo">Acesso compartilhado</h2><p>Este espaço está em modo <strong>Somente visualização</strong>. Gerenciamento de convites, backups, restauração, reinicialização e alterações de permissões ficam disponíveis apenas para o proprietário.</p><p>Revogações bloqueiam novas leituras; o aplicativo não afirma apagar cópias já visualizadas ou capturas de tela.</p></section>;
   return <section className="painel pilha" aria-labelledby="privacidade-titulo">
     <div><h2 id="privacidade-titulo">Privacidade e seus dados</h2><p className="ajuda">Consulte as informações de privacidade e acesse uma cópia dos seus dados.</p></div>
     <div className="grade-custos">

@@ -3,16 +3,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { db, auth } from './firebase';
 import { dadosPadrao, lerDados, type DadosPersistidos } from './gestao';
-import { SyncSession, version, type Recovery, type ResetPlan, type ResetConfirmation } from './syncSession';
+import { SyncSession, version, type Recovery, type ResetPlan, type ResetConfirmation, type SyncSessionOptions } from './syncSession';
 
-export function useGestao(uid: string) {
+export function useGestao(uid: string, options: SyncSessionOptions = {}) {
+  const readOnly = options.readOnly === true;
+  const storageNamespace = options.storageNamespace;
   const session = useRef<SyncSession<DadosPersistidos> | null>(null);
   const [view, setView] = useState({ dados: null as DadosPersistidos | null,
     dadosNuvem: null as DadosPersistidos | null, status: 'Carregando seus dados…',
     erro: '', conflito: false, geracaoAnterior: false, versaoNuvem: version(null),
     reinicio: null as ResetPlan | null, recuperacoes: [] as Recovery<DadosPersistidos>[] });
   useEffect(() => {
-    const current = new SyncSession(db, uid, localStorage, sessionStorage, lerDados, dadosPadrao);
+    const current = new SyncSession(db, uid, localStorage, sessionStorage, lerDados, dadosPadrao, undefined, { readOnly, storageNamespace });
     session.current = current;
     current.onChange = () => {
       let dadosNuvem: DadosPersistidos | null = null;
@@ -31,8 +33,8 @@ export function useGestao(uid: string) {
     return () => {
       current.close(); window.removeEventListener('online', online); window.removeEventListener('storage', storage);
     };
-  }, [uid]);
-  return { ...view,
+  }, [uid, readOnly, storageNamespace]);
+  return { ...view, somenteLeitura: readOnly,
     atualizar: (transform: (data: DadosPersistidos) => DadosPersistidos, formBase?: DadosPersistidos) => session.current?.update(transform, formBase) ?? false,
     resolver: (source: 'local' | 'nuvem', expectedVersion?: string) => session.current?.resolve(source, expectedVersion),
     recuperar: (key: string) => session.current?.recover(key),
