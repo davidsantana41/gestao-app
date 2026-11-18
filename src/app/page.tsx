@@ -13,9 +13,9 @@ import AvulsoForm from '@/components/gestao/AvulsoForm';
 import Relatorios, { Historico } from '@/components/gestao/Relatorios';
 import { auth } from '@/lib/firebase';
 import { useGestao } from '@/lib/useGestao';
-import type { EstadoCompartilhamento } from '@/lib/useCompartilhamento';
-import { useCompartilhamento } from '@/lib/useCompartilhamento';
-import Compartilhamento, { SeletorEspacos, type EspacoSelecionado } from '@/components/Compartilhamento';
+import { useCompartilhamento, type EstadoCompartilhamento } from '@/lib/useCompartilhamento';
+import ContaCompartilhamento from '@/components/ContaCompartilhamento';
+import type { EspacoSelecionado } from '@/components/Compartilhamento';
 import { dataLocal, moeda, resumir, type Lancamento } from '@/lib/gestao';
 
 function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; onSalvar: (texto: string, base: string) => boolean; readOnly?: boolean }) {
@@ -26,8 +26,24 @@ function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; on
   return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} readOnly={readOnly} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label>{!readOnly && <button className="botao secundario" type="button" onClick={() => { if (onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button>}</section>;
 }
 
-export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing }: {
-  uid: string; email: string | null; readOnly?: boolean; viewerUid?: string; sharing?: EstadoCompartilhamento;
+function CabecalhoApp({ email, readOnly, modoEscuro, saindo, convitePendente, contaAberta, onAbrirConta, onAlternarTema, onSair }: {
+  email: string | null;
+  readOnly: boolean;
+  modoEscuro: boolean;
+  saindo: boolean;
+  convitePendente: boolean;
+  contaAberta: boolean;
+  onAbrirConta?: () => void;
+  onAlternarTema: () => void;
+  onSair: () => Promise<void>;
+}) {
+  return <header className="cabecalho"><div className="container cabecalho-conteudo"><div className="marca">A<span>APPCAR<small>Seu trabalho, suas contas.</small></span></div><div className="usuario"><span>{email}</span>{readOnly && <span className="selo">Somente visualização</span>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}<button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button></div></div></header>;
+}
+
+export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing, espacoSelecionado, onSelecionarEspaco, contaAberta = false, onAbrirConta }: {
+  uid: string; email: string | null; readOnly?: boolean; viewerUid?: string;
+  sharing?: EstadoCompartilhamento; espacoSelecionado?: EspacoSelecionado;
+  onSelecionarEspaco?: (ownerUid: EspacoSelecionado) => void; contaAberta?: boolean; onAbrirConta?: () => void;
 }) {
   const storage = useGestao(uid, { readOnly, storageNamespace: readOnly && viewerUid ? `shared-${viewerUid}-${uid}` : undefined });
   const { dados } = storage;
@@ -57,14 +73,18 @@ export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing }: 
     const url = URL.createObjectURL(new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `appcar-backup-${dataLocal()}.json`; link.click(); URL.revokeObjectURL(url);
   };
+  const contaView = contaAberta && sharing && espacoSelecionado !== undefined && onSelecionarEspaco && onAbrirConta
+    ? <ContaCompartilhamento estado={sharing} selecionado={espacoSelecionado} onSelecionar={onSelecionarEspaco} onVoltar={onAbrirConta} />
+    : null;
   return <main className={`app ${dados.modoEscuro ? 'escuro' : 'claro'}`}>
     {confirmacao && <Confirmacao titulo={confirmacao.titulo} descricao={confirmacao.descricao} confirmar={confirmacao.confirmar} onCancelar={() => setConfirmacao(undefined)} onConfirmar={() => { confirmacao.executar(); setConfirmacao(undefined); }} />}
-    <header className="cabecalho"><div className="container cabecalho-conteudo"><div className="marca">A<span>APPCAR<small>Seu trabalho, suas contas.</small></span></div><div className="usuario"><span>{email}</span>{readOnly && <span className="selo">Somente visualização</span>}{!readOnly && <button type="button" className="botao discreto" onClick={() => storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro }))}>{dados.modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}<button type="button" className="botao secundario" disabled={saindo} onClick={async () => {
+    <CabecalhoApp email={email} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={() => { storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro })); }} onSair={async () => {
       setSaindo(true); try { await storage.aguardar(); await signOut(auth); } catch { setMensagem('A sincronização ainda está pendente. Tente sair novamente em instantes.'); } finally { setSaindo(false); }
-    }}>{saindo ? 'Aguarde…' : 'Sair'}</button></div></div></header>
-    <div className="container conteudo">
+    }} />
+    {contaView ? <div className="container conteudo">{contaView}</div> : <div className="container conteudo">
       <VerificarEmail />
       <div className="boas-vindas"><div><p className="sobretitulo">{readOnly ? 'ESPAÇO COMPARTILHADO' : 'GESTÃO FINANCEIRA'}</p><h1>{readOnly ? 'Dados do proprietário' : 'Seu painel de trabalho'}</h1><p>{readOnly ? 'Você está consultando este espaço em modo Somente visualização.' : 'Acompanhe cada turno e dê um destino ao seu dinheiro.'}</p></div>{!readOnly && <button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button>}</div>
+      {onAbrirConta && <div className="espaco-atual" role="status"><span>Espaço atual</span><strong>{readOnly ? 'Compartilhado · Somente visualização' : 'Meus dados'}</strong><button type="button" className="botao discreto" onClick={onAbrirConta}>Trocar espaço</button></div>}
       <div className="barra-status"><span className="ponto" /><p role="status">{storage.status}</p><button type="button" className="botao discreto" onClick={storage.tentarNovamente}>Verificar sincronização</button></div>
       {!readOnly && storage.recuperacoes.length > 0 && <section className="painel aviso"><h2>Cópias locais de outras sessões</h2><p>Há cópias com alterações pendentes neste navegador. Recuperar uma cópia preserva os dados atuais e exige comparação com a nuvem.</p>{storage.recuperacoes.map((copia, indice) => <button key={copia.key} type="button" className="botao secundario" onClick={() => setConfirmacao({ titulo: 'Recuperar cópia local?', descricao: 'Os dados atuais serão preservados antes da recuperação. Nenhuma gravação na nuvem será feita automaticamente.', confirmar: 'Recuperar cópia', executar: () => { if (storage.recuperar(copia.key)) { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); } } })}>Recuperar cópia {indice + 1} ({copia.data.historico.length} lançamentos)</button>)}</section>}
       {storage.erro && <p role="alert" className="mensagem erro">{storage.erro}</p>}
@@ -88,9 +108,9 @@ export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing }: 
       </div>
       {aba === 'relatorios' && <Relatorios dados={dados} mes={mes} onMes={setMes} onEditar={readOnly ? undefined : editar} onExcluir={readOnly ? undefined : pedirExclusao} />}
       {aba === 'configuracoes' && <CustosFixos key={`${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} itens={dados.custosFixos} readOnly={readOnly} onSalvar={(custosFixos, base) => { const salvo = storage.atualizar(d => ({ ...d, custosFixos }), { ...dados, custosFixos: base }); if (salvo) setMensagem('Custos salvos localmente. Os turnos antigos mantêm o rateio original.'); return salvo; }} />}
-      {aba === 'privacidade' && <div className="pilha"><Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage.dadosNuvem} readOnly={readOnly} />{!readOnly && <>{sharing && <Compartilhamento uid={uid} estado={sharing} />}<ReiniciarDados uid={uid} email={email} plan={storage.reinicio} prepare={storage.prepararReinicio} backup={storage.backupReinicio} exported={storage.marcarBackupExportado} execute={storage.executarReinicio} check={storage.verificarReinicio} onComplete={() => { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); }} /></>}</div>}
+      {aba === 'privacidade' && <div className="pilha"><Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage.dadosNuvem} readOnly={readOnly} />{!readOnly && <ReiniciarDados uid={uid} email={email} plan={storage.reinicio} prepare={storage.prepararReinicio} backup={storage.backupReinicio} exported={storage.marcarBackupExportado} execute={storage.executarReinicio} check={storage.verificarReinicio} onComplete={() => { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); }} />}</div>}
       <footer>APPCAR · Gestão do seu trabalho · Versão reconstruída</footer>
-    </div>
+    </div>}
   </main>;
 }
 
@@ -108,10 +128,8 @@ export default function Home() {
 function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | null } }) {
   const sharing = useCompartilhamento(sessao.uid, sessao.email);
   const [espaco, setEspaco] = useState<EspacoSelecionado>('proprio');
+  const [contaAberta, setContaAberta] = useState(false);
   const espacoAtivo = espaco !== 'proprio' && sharing.ativos.some(convite => convite.ownerUid === espaco) ? espaco : 'proprio';
   const compartilhado = espacoAtivo !== 'proprio' ? sharing.ativos.find(convite => convite.ownerUid === espacoAtivo) : undefined;
-  return <>
-    <div className="container seletor-espacos"><SeletorEspacos estado={sharing} selecionado={espacoAtivo} onSelecionar={setEspaco} /></div>
-    <Dashboard key={`${sessao.uid}-${espacoAtivo}`} uid={compartilhado?.ownerUid || sessao.uid} email={sessao.email} readOnly={Boolean(compartilhado)} viewerUid={sessao.uid} sharing={sharing} />
-  </>;
+  return <Dashboard key={`${sessao.uid}-${espacoAtivo}`} uid={compartilhado?.ownerUid || sessao.uid} email={sessao.email} readOnly={Boolean(compartilhado)} viewerUid={sessao.uid} sharing={sharing} espacoSelecionado={espacoAtivo} onSelecionarEspaco={setEspaco} contaAberta={contaAberta} onAbrirConta={() => setContaAberta(value => !value)} />;
 }

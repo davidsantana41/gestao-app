@@ -176,7 +176,7 @@ async function main() {
   await a.clickExact('Privacidade');
   await a.wait("Boolean(document.querySelector('section[aria-labelledby=compartilhamento-titulo]'))");
   await a.fill('section[aria-labelledby="compartilhamento-titulo"] input[type=email]', partner.email);
-  await a.clickExact('Enviar convite');
+  await a.clickExact('Convidar parceira');
   await a.wait("document.body.innerText.includes('Convite pendente')");
   pass('Proprietário cria convite pendente para o e-mail de teste');
 
@@ -221,7 +221,7 @@ async function main() {
   await a.evaluate('window.confirm=()=>true');
   await a.clickExact('Revogar acesso');
   await a.wait("document.body.innerText.includes('Acesso revogado')");
-  await b.wait("![...document.querySelectorAll('button')].some(b=>b.textContent.includes('Espaço compartilhado'))");
+  await b.wait("!document.body.innerText.includes('Novo lançamento do proprietário')");
   assert.equal(await b.evaluate("document.body.innerText.includes('Novo lançamento do proprietário')"), false);
   assert.equal(await b.evaluate("document.body.innerText.includes('Lançamento próprio da parceira')"), true);
   const afterRevocation = await firestoreRead(owner.localId, partner.idToken);
