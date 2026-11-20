@@ -4,6 +4,7 @@ const nextConfig: NextConfig = {
   /* config options here */
   experimental: {
     agentFeedback: true,
+    agentUpgrade: "security",
   },
   // Evita reutilizar trechos do formulário enquanto os valores estão sendo editados.
   reactCompiler: false,
