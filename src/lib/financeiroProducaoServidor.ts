@@ -1,30 +1,23 @@
 import 'server-only';
 
+import { mkdtempSync, renameSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getVercelOidcToken } from '@vercel/oidc';
+import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { FieldValue, getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import { uuidFinanceiro } from './comandoFinanceiro';
 import { confirmarComando, ErroServico, type TransacaoFinanceira } from './executorFinanceiroServidor';
 import { lerDados } from './gestao';
 import { acaoDeCaixinha, confirmarCaixinha, consultarCaixinhas, validarSaldosConciliados, type TransacaoCatalogo } from './gestaoCaixinhasServidor';
-import { criarAutenticadorFirebase, type VerificadorFirebaseServidor } from './identidadeFinanceiraServidor';
+import { criarAutenticadorFirebase } from './identidadeFinanceiraServidor';
 
 const projeto = 'appcar-a0886';
 const nomeApp = 'appcar-financeiro-producao';
-type AppAdmin = { name: string; options: { projectId?: string } };
-type Referencia = { path: string };
 type Registro = Record<string, unknown>;
-type Consulta = { where(campo: string, operador: 'in', valor: readonly string[]): Consulta };
-type TransacaoAdmin = {
-  get(ref: Referencia): Promise<{ data(): Registro | undefined }>;
-  get(ref: Consulta): Promise<{ docs: { data(): Registro }[] }>;
-  set(ref: Referencia, dados: Registro, opcoes?: { mergeFields: string[] }): unknown;
-};
-type BancoAdmin = {
-  doc(caminho: string): Referencia;
-  collection(caminho: string): Consulta;
-  runTransaction<T>(executar: (tx: TransacaoAdmin) => Promise<T>): Promise<T>;
-};
 
-function listarColecao(db: BancoAdmin, tx: TransacaoAdmin): TransacaoCatalogo['listar'] {
+function listarColecao(db: Firestore, tx: Transaction): TransacaoCatalogo['listar'] {
   return async (caminho, filtro) => {
     const colecao = db.collection(caminho);
     const consulta = filtro ? colecao.where(filtro.campo, filtro.operador, filtro.valor) : colecao;
@@ -32,7 +25,35 @@ function listarColecao(db: BancoAdmin, tx: TransacaoAdmin): TransacaoCatalogo['l
   };
 }
 
-function infraestrutura() {
+let caminhoToken: string | undefined;
+async function prepararCredencialVercel() {
+  if (process.env.VERCEL_ENV !== 'production') return;
+  const audience = process.env.APPCAR_FIREBASE_OIDC_AUDIENCE;
+  const conta = process.env.APPCAR_FIREBASE_OIDC_SERVICE_ACCOUNT;
+  if (!audience || !/^\/\/iam\.googleapis\.com\/projects\/\d+\/locations\/global\/workloadIdentityPools\/[\w-]+\/providers\/[\w-]+$/.test(audience)
+      || !conta?.endsWith('@' + projeto + '.iam.gserviceaccount.com') || !/^[a-z0-9-]+@[a-z0-9.-]+$/.test(conta)) {
+    throw new ErroServico(503, 'Identidade do serviço financeiro não configurada.');
+  }
+  const token = await getVercelOidcToken();
+  if (!caminhoToken) {
+    const diretorio = mkdtempSync(join(tmpdir(), 'appcar-firebase-'));
+    caminhoToken = join(diretorio, 'token');
+    const config = join(diretorio, 'adc.json');
+    writeFileSync(config, JSON.stringify({
+      type: 'external_account', audience,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+      token_url: 'https://sts.googleapis.com/v1/token',
+      service_account_impersonation_url: 'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/' + conta + ':generateAccessToken',
+      credential_source: { file: caminhoToken, format: { type: 'text' } },
+    }), { mode: 0o600 });
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = config;
+  }
+  const temporario = caminhoToken + '.tmp';
+  writeFileSync(temporario, token, { mode: 0o600 });
+  renameSync(temporario, caminhoToken);
+}
+
+async function infraestrutura() {
   if (process.env.NODE_ENV !== 'production'
       || (process.env.VERCEL_ENV && process.env.VERCEL_ENV !== 'production')
       || process.env.APPCAR_FINANCEIRO_PRODUCAO !== '1' || process.env.APPCAR_FIREBASE_PROJECT_ID !== projeto
@@ -40,30 +61,14 @@ function infraestrutura() {
     throw new ErroServico(503, 'Serviço financeiro de produção desabilitado.');
   }
 
-  // O SDK externo e as ADC pertencem ao ambiente Node do servidor.
-  const { createRequire } = process.getBuiltinModule('node:module');
-  const carregar = createRequire(join(process.cwd(), 'package.json'));
-  const apps = carregar('firebase-admin/app') as {
-    applicationDefault(): unknown;
-    getApps(): AppAdmin[];
-    initializeApp(opcoes: { projectId: string; credential: unknown }, nome: string): AppAdmin;
-  };
-  const auth = carregar('firebase-admin/auth') as {
-    getAuth(app: AppAdmin): { verifyIdToken(token: string, revogacao: true): Promise<
-      Awaited<ReturnType<VerificadorFirebaseServidor['verifyIdToken']>> & { firebase?: { sign_in_provider?: string } }
-    > };
-  };
-  const firestore = carregar('firebase-admin/firestore') as {
-    getFirestore(app: AppAdmin): BancoAdmin;
-    FieldValue: { serverTimestamp(): unknown };
-  };
-  const app = apps.getApps().find(item => item.name === nomeApp)
-    ?? apps.initializeApp({ projectId: projeto, credential: apps.applicationDefault() }, nomeApp);
+  await prepararCredencialVercel();
+  const app = getApps().find(item => item.name === nomeApp)
+    ?? initializeApp({ projectId: projeto, credential: applicationDefault() }, nomeApp);
   if (app.options.projectId !== projeto) throw new ErroServico(503, 'Projeto financeiro divergente.');
-  const adminAuth = auth.getAuth(app);
+  const adminAuth = getAuth(app);
   return {
-    db: firestore.getFirestore(app),
-    agora: () => firestore.FieldValue.serverTimestamp(),
+    db: getFirestore(app),
+    agora: FieldValue.serverTimestamp,
     autenticar: criarAutenticadorFirebase({
       async verifyIdToken(token, revogacao) {
         const identidade = await adminAuth.verifyIdToken(token, revogacao);
@@ -77,7 +82,7 @@ function infraestrutura() {
 }
 
 async function autenticarRequisicao(cabecalho: string | undefined) {
-  const infra = infraestrutura();
+  const infra = await infraestrutura();
   try {
     const { uid } = await infra.autenticar(cabecalho);
     if (!uidValido(uid)) throw new Error('UID inválido.');

@@ -104,8 +104,10 @@ service cloud.firestore {
 
     match /users/{userId}/appData/main {
       allow read: if owner(userId) || activePartner(userId);
-      allow create: if owner(userId) && allowedFields(request.resource.data) && validCreate(request.resource.data);
-      allow update: if owner(userId) && allowedFields(request.resource.data) && validUpdate(resource.data, request.resource.data);
+      allow create: if owner(userId) && !exists(/databases/$(database)/documents/financeiroIntegrado/$(userId))
+        && allowedFields(request.resource.data) && validCreate(request.resource.data);
+      allow update: if owner(userId) && !exists(/databases/$(database)/documents/financeiroIntegrado/$(userId))
+        && allowedFields(request.resource.data) && validUpdate(resource.data, request.resource.data);
       allow delete: if false;
     }
     match /shareInvites/{ownerUid} {
