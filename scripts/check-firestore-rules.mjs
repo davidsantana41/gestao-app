@@ -32,6 +32,29 @@ beforeEach(async () => {
 });
 after(async () => { await env?.cleanup(); });
 
+test('cadastro privado: titular salva perfil e veículo, parceiro e anônimo são recusados', async () => {
+  const token = { firebase: { sign_in_provider: 'password' } };
+  const alice = env.authenticatedContext('alice', token).firestore();
+  const bob = env.authenticatedContext('bob', token).firestore();
+  const anonimo = env.authenticatedContext('alice', { firebase: { sign_in_provider: 'anonymous' } }).firestore();
+  const ref = (db, ficha) => doc(db, 'users', 'alice', 'cadastro', ficha);
+  const perfil = { nome: 'Pessoa Exemplo', nascimento: '1990-03-01', email: 'contato@example.com', celular: '11911111111' };
+  const veiculo = { marca: 'Exemplo', modelo: 'Modelo', versao: 'Versão', cor: 'Azul', combustivel: 'Flex',
+    placa: 'ABC1D23', anoFabricacao: 2024, anoModelo: 2025, km: 1500 };
+  await env.withSecurityRulesDisabled(ctx => setDoc(share(ctx.firestore(), 'alice'), invite('alice', 'bob@example.com', 'active', 'bob')));
+  await assertSucceeds(getDoc(own(bob, 'alice')));
+  await assertSucceeds(setDoc(ref(alice, 'perfil'), perfil));
+  await assertSucceeds(setDoc(ref(alice, 'veiculo'), veiculo));
+  await assertSucceeds(updateDoc(ref(alice, 'veiculo'), { km: 2000 }));
+  assert.equal((await assertSucceeds(getDoc(ref(alice, 'veiculo')))).data().km, 2000);
+  await assertFails(updateDoc(ref(alice, 'veiculo'), { anoModelo: 2027 }));
+  await assertFails(setDoc(ref(alice, 'outro'), perfil));
+  for (const db of [bob, anonimo, env.unauthenticatedContext().firestore()]) {
+    await assertFails(getDoc(ref(db, 'perfil')));
+    await assertFails(setDoc(ref(db, 'veiculo'), veiculo));
+  }
+});
+
 for (const [label, uid, token] of [
   ['password verified', 'alice', { email_verified: true, firebase: { sign_in_provider: 'password' } }],
   ['password unverified', 'alice', { email_verified: false, firebase: { sign_in_provider: 'password' } }],

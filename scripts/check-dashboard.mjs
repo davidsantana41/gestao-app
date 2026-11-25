@@ -20,10 +20,12 @@ export default function TestPage() {
     window.confirm = () => window.__confirm !== false;
     window.alert = message => { window.__alert = message; };
   }, []);
-  return <Dashboard uid="regression-test" email="teste@example.com" />;
+  return <Dashboard uid="regression-test" viewerUid="regression-test" email="teste@example.com" />;
 }`;
   fs.writeFileSync(path.join(app, 'src/app/page.tsx'), page);
-  fs.writeFileSync(path.join(app, 'src/lib/firebase.ts'), 'export const auth = {}, db = {};');
+  fs.writeFileSync(path.join(app, 'src/lib/firebase.ts'), 'export const auth = { currentUser: { uid: "regression-test" } }, db = {};');
+  const cadastro = 'src/components/gestao/CadastroMotorista.tsx';
+  fs.writeFileSync(path.join(app, cadastro), fs.readFileSync(cadastro, 'utf8').replace("from 'firebase/firestore'", "from '@/lib/testStorage'"));
   let hook = fs.readFileSync('src/lib/useGestao.ts', 'utf8').replace("from 'firebase/firestore'", "from './testStorage'");
   fs.writeFileSync(path.join(app, 'src/lib/useGestao.ts'), hook);
   fs.writeFileSync(path.join(app, 'src/lib/syncSession.ts'), fs.readFileSync('src/lib/syncSession.ts','utf8').replace("from 'firebase/firestore'", "from './testStorage'"));
@@ -38,9 +40,10 @@ legado.reservasDiariasDia.push(
   { id: 'duplicada', nome: 'Primeira duplicada', valor: 0 },
   { id: 'duplicada', nome: 'Segunda duplicada', valor: 0 },
 );
-export const doc = () => ({});
-export const getDoc = async () => {
+export const doc = (_db, ...segments) => ({ ficha: segments[2] === 'cadastro' ? segments[3] : undefined });
+export const getDoc = async (ref) => {
  if (window.__offline) throw new Error('Offline simulado');
+ if (ref?.ficha) return { data: () => JSON.parse(localStorage.getItem('mock-cadastro-' + ref.ficha) || 'null') };
  return { exists: () => true, data: () => JSON.parse(localStorage.getItem('mock-remote') || JSON.stringify(seed)) };
 };
 export const getDocFromServer = getDoc;
@@ -60,6 +63,7 @@ export const onSnapshot = (_ref, _options, accept, error) => {
 export const setDoc = async (_ref, dados) => {
  await new Promise(resolve => setTimeout(resolve, 75));
  if (window.__offline) throw new Error('Offline simulado');
+ if (_ref.ficha) { localStorage.setItem('mock-cadastro-' + _ref.ficha, JSON.stringify(dados)); return; }
  (window.__writes ??= []).push(JSON.parse(JSON.stringify(dados)));
  localStorage.setItem('mock-remote', JSON.stringify(dados));
  window.dispatchEvent(new Event('mock-remote-change'));
@@ -120,6 +124,26 @@ window.button = text => [...document.querySelectorAll('button')].find(b => b.tex
 window.field = text => [...document.querySelectorAll('label')].find(l => l.querySelector('span')?.textContent === text)?.querySelector('input');
 window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`);
     assert.equal(await evaluate('(window.__writes || []).length'), 0, 'Carregar nunca deve gravar na nuvem.');
+    await evaluate("document.querySelector('.demo-conta-menu summary').click(); button('Meu perfil').click(); tick()");
+    assert.equal(await evaluate("document.querySelector('dialog[open]')?.innerText.includes('E-mail de contato')"), true);
+    for (const [campo, valor] of Object.entries({ nome: 'Marina Exemplo', nascimento: '1990-06-15', email: 'marina@example.com', celular: '11900000000' })) {
+      await evaluate(`document.querySelector('dialog [name=${campo}]').value = ${JSON.stringify(valor)}`);
+    }
+    await evaluate("button('Salvar perfil').click()");
+    await evaluate("new Promise(resolve => setTimeout(resolve, 200))");
+    assert.equal(await evaluate("JSON.parse(localStorage.getItem('mock-cadastro-perfil')).nome"), 'Marina Exemplo');
+    await evaluate("button('Fechar').click(); tick()");
+    assert.match(await evaluate("document.querySelector('.demo-conta-menu summary').textContent"), /Marina Exemplo/);
+    await evaluate("document.querySelector('.demo-conta-menu summary').click(); button('Meus veículos').click(); tick()");
+    for (const [campo, valor] of Object.entries({ marca: 'Exemplo', modelo: 'Modelo', versao: 'Touring', anoFabricacao: '2024',
+      anoModelo: '2025', placa: 'ABC1D23', km: '12000', combustivel: 'Flex', cor: 'Azul' })) {
+      await evaluate(`document.querySelector('dialog [name=${campo}]').value = ${JSON.stringify(valor)}`);
+    }
+    await evaluate("button('Salvar veículo').click()");
+    await evaluate("new Promise(resolve => setTimeout(resolve, 200))");
+    assert.equal(await evaluate("JSON.parse(localStorage.getItem('mock-cadastro-veiculo')).km"), 12000);
+    await evaluate("button('Fechar').click(); tick()");
+    assert.equal(await evaluate('(window.__writes || []).length'), 0, 'O cadastro deve usar documentos separados do financeiro.');
     const legacy = await evaluate(`JSON.parse(localStorage.getItem('gestao-app-dados-v2-regression-test-nuvem-antes-reconstrucao')).historico[0]`);
     assert.equal(legacy.id, 'legado-1');
     await evaluate("button('Histórico e relatórios').click(); tick()");

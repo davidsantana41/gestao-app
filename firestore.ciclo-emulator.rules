@@ -1,0 +1,214 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(userId) { return request.auth != null && request.auth.uid == userId; }
+    function signedIn() { return request.auth != null; }
+    function nonAnonymous() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+    function nonAnonymousOwner(userId) { return owner(userId) && nonAnonymous(); }
+    function emailMatches(value) {
+      return nonAnonymous()
+        && request.auth.token.email is string && value == request.auth.token.email.lower();
+    }
+    function inviteFields(data) {
+      return data.keys().hasOnly(['ownerUid', 'email', 'status', 'partnerUid', 'createdAt', 'updatedAt', 'acceptedAt', 'revokedAt'])
+        && data.ownerUid is string && data.email is string && data.status is string
+        && data.createdAt is string && data.updatedAt is string;
+    }
+    function noPartner(data) {
+      return !data.keys().hasAny(['partnerUid']) || data.partnerUid == null;
+    }
+    function pendingInvite(data, ownerUid) {
+      return inviteFields(data) && data.ownerUid == ownerUid && data.status == 'pending'
+        && data.email == data.email.lower() && noPartner(data) && !data.keys().hasAny(['acceptedAt', 'revokedAt']);
+    }
+    function activeInvite(data, ownerUid) {
+      return inviteFields(data) && data.ownerUid == ownerUid && data.status == 'active'
+        && data.partnerUid is string && data.partnerUid != ownerUid
+        && data.acceptedAt is string && !data.keys().hasAny(['revokedAt']);
+    }
+    function revokedInvite(data, ownerUid) {
+      return inviteFields(data) && data.ownerUid == ownerUid && data.status == 'revoked'
+        && noPartner(data) && data.revokedAt is string;
+    }
+    function activePartner(userId) {
+      return nonAnonymous()
+        && exists(/databases/$(database)/documents/shareInvites/$(userId))
+        && get(/databases/$(database)/documents/shareInvites/$(userId)).data.status == 'active'
+        && get(/databases/$(database)/documents/shareInvites/$(userId)).data.partnerUid == request.auth.uid;
+    }
+    function partnerCanReadInvite(ownerUid) {
+      return nonAnonymous() && (
+        (resource.data.status == 'pending' && emailMatches(resource.data.email))
+        || (resource.data.status == 'active' && resource.data.partnerUid == request.auth.uid)
+      );
+    }
+    function allowedFields(data) {
+      return data.keys().hasOnly(['custosFixos', 'reservasDiarias', 'nomeReserva1', 'nomeReserva2', 'nomeReserva3', 'lembrete', 'historico', 'modoEscuro', '_sync']);
+    }
+    function hasSync(data) { return data.keys().hasAny(['_sync']); }
+    function validSync(data) {
+      return data._sync is map
+        && data._sync.keys().hasAll(['generation', 'revision'])
+        && data._sync.keys().hasOnly(['generation', 'revision', 'resetId', 'startedOn'])
+        && data._sync.generation is int && data._sync.generation >= 0
+        && data._sync.revision is int && data._sync.revision >= 0;
+    }
+    function resetShape(data, nextGeneration) {
+      return validSync(data) && data._sync.generation == nextGeneration && data._sync.revision == 0
+        && data._sync.keys().hasAll(['resetId', 'startedOn'])
+        && data._sync.get('resetId', '') is string && data._sync.get('resetId', '').size() >= 20
+        && data._sync.get('startedOn', '') is string && data._sync.get('startedOn', '').matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.historico is list && data.historico.size() == 0;
+    }
+    function firstVersion(data) {
+      return validSync(data) && data._sync.generation == 0 && data._sync.revision == 1
+        && data._sync.keys().hasOnly(['generation', 'revision']);
+    }
+    function validCreate(data) {
+      return !hasSync(data) || firstVersion(data) || resetShape(data, 1);
+    }
+    function validUpdate(before, after) {
+      return !hasSync(before) ? validCreate(after)
+        : hasSync(after) && validSync(after) && (
+          (after._sync.generation == before._sync.generation
+            && after._sync.revision == before._sync.revision + 1
+            && after._sync.diff(before._sync).affectedKeys().hasOnly(['revision']))
+          || resetShape(after, before._sync.generation + 1));
+    }
+    function pilotoCiclo(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid)/caixinhasControle/piloto)
+        && get(/databases/$(database)/documents/users/$(uid)/caixinhasControle/piloto).data.ativo == true;
+    }
+    function operadorCiclo(uid) {
+      return nonAnonymousOwner(uid) && request.auth.token.get('cicloWorker', false) == true && pilotoCiclo(uid);
+    }
+    function operadorFinanceiroCiclo(uid) {
+      return nonAnonymousOwner(uid) && request.auth.token.get('cicloFinanceWorker', false) == true && pilotoCiclo(uid);
+    }
+    function chaveRevisao(sync) {
+      return 'g' + string(sync.generation) + '-r' + string(sync.revision);
+    }
+    function reciboFinanceiroNovo(uid, sync) {
+      let id = chaveRevisao(sync);
+      let caminho = /databases/$(database)/documents/users/$(uid)/caixinhasRecibos/$(id);
+      return !exists(caminho) && getAfter(caminho).data.id == id;
+    }
+    function uuid(id) {
+      return id is string && id.matches('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
+    }
+    function textoCiclo(valor, limite) {
+      return valor is string && valor.size() <= limite && valor.matches('(?s).*[^\\s].*');
+    }
+    function formatoCaixinha(data, uid, id) {
+      return data.keys().hasOnly(['id', 'proprietarioUid', 'nome', 'finalidade', 'estado', 'criadoEm', 'atualizadoEm', 'versao', 'operacaoId'])
+        && id.matches('^diaria:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+        && data.id == id && data.proprietarioUid == uid && textoCiclo(data.nome, 120)
+        && data.finalidade is string && data.finalidade.size() <= 300
+        && data.estado in ['ativa', 'arquivada'] && data.criadoEm is timestamp
+        && data.atualizadoEm == request.time && data.versao is int && data.versao > 0 && uuid(data.operacaoId);
+    }
+    function retratoCaixinha(data) {
+      return {'nome': data.nome, 'finalidade': data.finalidade, 'estado': data.estado};
+    }
+    function transicaoCiclo(acao, antes, depois) {
+      return antes.finalidade == depois.finalidade && (
+        (acao == 'renomear' && antes.estado == 'ativa' && depois.estado == 'ativa' && antes.nome != depois.nome)
+        || (acao == 'arquivar' && antes.estado == 'ativa' && depois.estado == 'arquivada' && antes.nome == depois.nome)
+        || (acao == 'reativar' && antes.estado == 'arquivada' && depois.estado == 'ativa' && antes.nome == depois.nome)
+      );
+    }
+    function eventoNovo(uid, operacaoId, caixinhaId) {
+      let caminho = /databases/$(database)/documents/users/$(uid)/caixinhasAuditoria/$(operacaoId);
+      return !exists(caminho) && getAfter(caminho).data.id == operacaoId
+        && getAfter(caminho).data.caixinhaId == caixinhaId;
+    }
+    function eventoComCaixinha(uid, id, evento) {
+      let caminho = /databases/$(database)/documents/users/$(uid)/caixinhasCatalogo/$(evento.caixinhaId);
+      let atual = getAfter(caminho).data;
+      let financeiro = get(/databases/$(database)/documents/users/$(uid)/appData/main).data;
+      return evento.keys().hasOnly(['id', 'caixinhaId', 'acao', 'autorUid', 'confirmadoEm', 'geracao', 'revisaoFinanceira', 'versaoAnterior', 'versaoNova', 'antes', 'depois', 'motivo', 'saldoVerificado'])
+        && uuid(id) && evento.id == id && evento.autorUid == uid && evento.confirmadoEm == request.time
+        && evento.geracao == financeiro._sync.generation && evento.revisaoFinanceira == financeiro._sync.revision
+        && atual.operacaoId == id && atual.atualizadoEm == request.time && evento.versaoNova == atual.versao
+        && evento.depois == retratoCaixinha(atual) && evento.versaoAnterior == atual.versao - 1
+        && (evento.acao == 'arquivar' ? evento.saldoVerificado == 0 : evento.saldoVerificado == null)
+        && (evento.acao == 'criar'
+          ? atual.versao == 1 && !exists(caminho) && evento.antes == null && evento.motivo == null
+          : exists(caminho) && textoCiclo(evento.motivo, 500)
+            && evento.antes == retratoCaixinha(get(caminho).data)
+            && transicaoCiclo(evento.acao, get(caminho).data, atual));
+    }
+    match /users/{uid}/caixinhasControle/piloto {
+      allow read: if owner(uid);
+      allow write: if false;
+    }
+    match /users/{uid}/caixinhasCatalogo/{id} {
+      allow read: if owner(uid);
+      allow create: if operadorCiclo(uid) && formatoCaixinha(request.resource.data, uid, id)
+        && request.resource.data.versao == 1 && request.resource.data.estado == 'ativa'
+        && request.resource.data.criadoEm == request.time && eventoNovo(uid, request.resource.data.operacaoId, id);
+      allow update: if operadorCiclo(uid) && formatoCaixinha(request.resource.data, uid, id)
+        && request.resource.data.versao == resource.data.versao + 1
+        && request.resource.data.criadoEm == resource.data.criadoEm
+        && eventoNovo(uid, request.resource.data.operacaoId, id);
+      allow delete: if false;
+    }
+    match /users/{uid}/caixinhasAuditoria/{id} {
+      allow read: if owner(uid);
+      allow create: if operadorCiclo(uid) && eventoComCaixinha(uid, id, request.resource.data);
+      allow update, delete: if false;
+    }
+    match /users/{uid}/caixinhasConciliacao/{id} {
+      allow read: if owner(uid);
+      allow write: if false;
+    }
+    match /users/{uid}/caixinhasRecibos/{id} {
+      allow read: if owner(uid);
+      allow create: if operadorFinanceiroCiclo(uid) && formatoRecibo(uid, id, request.resource.data);
+      allow update, delete: if false;
+    }
+    function formatoRecibo(uid, id, data) {
+      let caminho = /databases/$(database)/documents/users/$(uid)/appData/main;
+      let antes = get(caminho).data._sync;
+      let depois = getAfter(caminho).data._sync;
+      return data.keys().hasOnly(['id', 'autorUid', 'assinatura', 'confirmadoEm'])
+        && data.id == id && id == chaveRevisao(depois) && data.autorUid == uid
+        && data.confirmadoEm == request.time && data.assinatura is string
+        && data.assinatura.matches('^[0-9a-f]{64}$')
+        && antes.generation == depois.generation && depois.revision == antes.revision + 1;
+    }
+    match /users/{userId}/appData/main {
+      allow read: if owner(userId) || activePartner(userId);
+      allow create: if owner(userId) && !pilotoCiclo(userId) && allowedFields(request.resource.data) && validCreate(request.resource.data);
+      allow update: if owner(userId) && allowedFields(request.resource.data) && validUpdate(resource.data, request.resource.data)
+        && (!pilotoCiclo(userId) || (hasSync(resource.data) && (
+          (operadorCiclo(userId) && resetShape(request.resource.data, resource.data._sync.generation + 1))
+          || (operadorFinanceiroCiclo(userId) && request.resource.data._sync.generation == resource.data._sync.generation
+            && reciboFinanceiroNovo(userId, request.resource.data._sync))
+        )));
+      allow delete: if false;
+    }
+    match /shareInvites/{ownerUid} {
+      allow read: if nonAnonymousOwner(ownerUid) || partnerCanReadInvite(ownerUid);
+      allow create: if nonAnonymousOwner(ownerUid) && pendingInvite(request.resource.data, ownerUid);
+      allow update: if (
+        nonAnonymousOwner(ownerUid) && (
+          (resource.data.status == 'pending' && revokedInvite(request.resource.data, ownerUid))
+          || (resource.data.status == 'active' && revokedInvite(request.resource.data, ownerUid))
+          || (resource.data.status == 'revoked' && pendingInvite(request.resource.data, ownerUid))
+        )
+      ) || (
+        signedIn() && request.auth.token.email_verified == true
+        && resource.data.status == 'pending' && emailMatches(resource.data.email)
+        && request.auth.uid != ownerUid && activeInvite(request.resource.data, ownerUid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'partnerUid', 'acceptedAt', 'updatedAt'])
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.ownerUid == resource.data.ownerUid
+      );
+      allow delete: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

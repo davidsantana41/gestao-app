@@ -56,7 +56,7 @@ before(async () => {
   assert.equal(info.firestore.host, '127.0.0.1');
   assert.equal(info.firestore.port, 8089);
   env = await initializeTestEnvironment({ projectId: projeto, firestore: {
-    host: '127.0.0.1', port: 8089, rules: await readFile(new URL('../firestore.rules', import.meta.url), 'utf8'),
+    host: '127.0.0.1', port: 8089, rules: await readFile(new URL('../firestore.ciclo-emulator.rules', import.meta.url), 'utf8'),
   } });
   operador = env.authenticatedContext(uid, { ...token, cicloWorker: true }).firestore();
   concorrente = env.authenticatedContext(uid, { ...token, cicloWorker: true }).firestore();

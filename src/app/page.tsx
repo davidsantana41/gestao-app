@@ -10,6 +10,7 @@ import AuthGate from '@/components/AuthGate';
 import ModuloSelecao from '@/components/ModuloSelecao';
 import GestaoFamiliar from '@/components/GestaoFamiliar';
 import AppcarLogo from '@/components/AppcarLogo';
+import CadastroMotorista from '@/components/gestao/CadastroMotorista';
 import TurnoForm from '@/components/gestao/TurnoForm';
 import CustosFixos from '@/components/gestao/CustosFixos';
 import AvulsoForm from '@/components/gestao/AvulsoForm';
@@ -30,8 +31,9 @@ function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; on
   return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} readOnly={readOnly} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label>{!readOnly && <button className="botao secundario" type="button" onClick={() => { if (onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button>}</section>;
 }
 
-function CabecalhoApp({ email, readOnly, modoEscuro, saindo, convitePendente, contaAberta, onAbrirConta, onAlternarTema, onSair, onTrocarModulo }: {
+function CabecalhoApp({ email, cadastroUid, readOnly, modoEscuro, saindo, convitePendente, contaAberta, onAbrirConta, onAlternarTema, onSair, onTrocarModulo }: {
   email: string | null;
+  cadastroUid?: string;
   readOnly: boolean;
   modoEscuro: boolean;
   saindo: boolean;
@@ -42,7 +44,7 @@ function CabecalhoApp({ email, readOnly, modoEscuro, saindo, convitePendente, co
   onSair: () => Promise<void>;
   onTrocarModulo?: () => void;
 }) {
-  return <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario"><span>{email}</span>{readOnly && <span className="selo">Somente visualização</span>}{onTrocarModulo && <button type="button" className="botao discreto" onClick={onTrocarModulo} title="Voltar à seleção de módulos">Módulos</button>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}<button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button></div></div></header>;
+  return <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario">{cadastroUid ? <CadastroMotorista uid={cadastroUid} email={email} tema={modoEscuro ? 'escuro' : 'claro'} /> : <span>{email}</span>}{readOnly && <span className="selo">Somente visualização</span>}{onTrocarModulo && <button type="button" className="botao discreto" onClick={onTrocarModulo} title="Voltar à seleção de módulos">Módulos</button>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}<button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button></div></div></header>;
 }
 
 export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing, espacoSelecionado, onSelecionarEspaco, contaAberta = false, onAbrirConta, onTrocarModulo }: {
@@ -84,7 +86,7 @@ export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing, es
     : null;
   return <main className={`app ${dados.modoEscuro ? 'escuro' : 'claro'}`}>
     {confirmacao && <Confirmacao titulo={confirmacao.titulo} descricao={confirmacao.descricao} confirmar={confirmacao.confirmar} onCancelar={() => setConfirmacao(undefined)} onConfirmar={() => { confirmacao.executar(); setConfirmacao(undefined); }} />}
-    <CabecalhoApp email={email} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={() => { storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro })); }} onTrocarModulo={onTrocarModulo} onSair={async () => {
+    <CabecalhoApp email={email} cadastroUid={!readOnly && viewerUid === uid ? uid : undefined} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={() => { storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro })); }} onTrocarModulo={onTrocarModulo} onSair={async () => {
       setSaindo(true); try { await storage.aguardar(); await signOut(auth); } catch { setMensagem('A sincronização ainda está pendente. Tente sair novamente em instantes.'); } finally { setSaindo(false); }
     }} />
     {contaView ? <div className="container conteudo">{contaView}</div> : <div className="container conteudo">
