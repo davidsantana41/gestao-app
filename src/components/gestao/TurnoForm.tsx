@@ -3,6 +3,7 @@
 import { useReducer, useState } from 'react';
 import { calcularTurno, criarTurno, decimal, moeda, novoFormulario, numero, type DadosPersistidos, type Lancamento, type TurnoFormulario } from '@/lib/gestao';
 import { Campo, Valor } from './Campo';
+import { sinalSaldo } from './saldo';
 
 type Acao = { tipo: 'campo'; campo: Exclude<keyof TurnoFormulario, 'reservas'>; valor: string }
   | { tipo: 'adicionar'; id: string } | { tipo: 'reserva'; id: string; campo: 'nome' | 'valor'; valor: string }
@@ -81,7 +82,7 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar }: {
           {conta.saidas.map(s => <div key={s.id}><dt>{s.nome}</dt><dd>{moeda(s.valor)}</dd></div>)}
           <div className="despesas"><dt>Total separado e despesas</dt><dd>{moeda(conta.despesas)}</dd></div>
         </dl>
-        <div className={`saldo ${conta.liquido < 0 ? 'negativo' : ''}`}><span>Saldo líquido do turno</span><strong data-testid="saldo-turno">{moeda(conta.liquido)}</strong></div>
+        <div className="saldo" data-saldo={sinalSaldo(conta.liquido)}><span>Saldo líquido do turno</span><strong data-testid="saldo-turno">{moeda(conta.liquido)}</strong></div>
         <p className="nota">Custos mensais divididos por {conta.dias} dias de trabalho. Reserva de acidente: R$ 0,038 × KM total.</p>
         {erro && <p role="alert" className="mensagem erro">{erro}</p>}
         <button type="submit" className="botao primario largo">{original ? 'Salvar alterações' : 'Salvar turno'}</button>

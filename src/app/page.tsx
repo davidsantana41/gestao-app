@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
@@ -7,9 +7,13 @@ import VerificarEmail from '@/components/VerificarEmail';
 import Privacidade from '@/components/Privacidade';
 import ReiniciarDados from '@/components/ReiniciarDados';
 import AuthGate from '@/components/AuthGate';
+import ModuloSelecao from '@/components/ModuloSelecao';
+import GestaoFamiliar from '@/components/GestaoFamiliar';
+import AppcarLogo from '@/components/AppcarLogo';
 import TurnoForm from '@/components/gestao/TurnoForm';
 import CustosFixos from '@/components/gestao/CustosFixos';
 import AvulsoForm from '@/components/gestao/AvulsoForm';
+import { sinalSaldo } from '@/components/gestao/saldo';
 import Relatorios, { Historico } from '@/components/gestao/Relatorios';
 import { auth } from '@/lib/firebase';
 import { useGestao } from '@/lib/useGestao';
@@ -26,7 +30,7 @@ function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; on
   return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} readOnly={readOnly} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label>{!readOnly && <button className="botao secundario" type="button" onClick={() => { if (onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button>}</section>;
 }
 
-function CabecalhoApp({ email, readOnly, modoEscuro, saindo, convitePendente, contaAberta, onAbrirConta, onAlternarTema, onSair }: {
+function CabecalhoApp({ email, readOnly, modoEscuro, saindo, convitePendente, contaAberta, onAbrirConta, onAlternarTema, onSair, onTrocarModulo }: {
   email: string | null;
   readOnly: boolean;
   modoEscuro: boolean;
@@ -36,14 +40,16 @@ function CabecalhoApp({ email, readOnly, modoEscuro, saindo, convitePendente, co
   onAbrirConta?: () => void;
   onAlternarTema: () => void;
   onSair: () => Promise<void>;
+  onTrocarModulo?: () => void;
 }) {
-  return <header className="cabecalho"><div className="container cabecalho-conteudo"><div className="marca">A<span>APPCAR<small>Seu trabalho, suas contas.</small></span></div><div className="usuario"><span>{email}</span>{readOnly && <span className="selo">Somente visualização</span>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}<button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button></div></div></header>;
+  return <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario"><span>{email}</span>{readOnly && <span className="selo">Somente visualização</span>}{onTrocarModulo && <button type="button" className="botao discreto" onClick={onTrocarModulo} title="Voltar à seleção de módulos">Módulos</button>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}<button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button></div></div></header>;
 }
 
-export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing, espacoSelecionado, onSelecionarEspaco, contaAberta = false, onAbrirConta }: {
+export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing, espacoSelecionado, onSelecionarEspaco, contaAberta = false, onAbrirConta, onTrocarModulo }: {
   uid: string; email: string | null; readOnly?: boolean; viewerUid?: string;
   sharing?: EstadoCompartilhamento; espacoSelecionado?: EspacoSelecionado;
   onSelecionarEspaco?: (ownerUid: EspacoSelecionado) => void; contaAberta?: boolean; onAbrirConta?: () => void;
+  onTrocarModulo?: () => void;
 }) {
   const storage = useGestao(uid, { readOnly, storageNamespace: readOnly && viewerUid ? `shared-${viewerUid}-${uid}` : undefined });
   const { dados } = storage;
@@ -55,7 +61,7 @@ export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing, es
   const [mensagem, setMensagem] = useState('');
   const [confirmacao, setConfirmacao] = useState<{ titulo: string; descricao: string; confirmar: string; executar: () => void }>();
   const [saindo, setSaindo] = useState(false);
-  if (!dados) return <main className="acesso"><section className="painel"><div className="marca">A<span>APPCAR</span></div><h1>{storage.erro ? 'Vamos recuperar seus dados' : 'Carregando seu painel'}</h1><p role={storage.erro ? 'alert' : 'status'}>{storage.erro || storage.status}</p>{storage.erro && <button className="botao primario" onClick={storage.tentarNovamente}>Tentar novamente</button>}</section></main>;
+  if (!dados) return <main className="acesso"><section className="painel"><AppcarLogo subtitulo="Carregando..." centralizado /><h1>{storage.erro ? 'Vamos recuperar seus dados' : 'Carregando seu painel'}</h1><p role={storage.erro ? 'alert' : 'status'}>{storage.erro || storage.status}</p>{storage.erro && <button className="botao primario" onClick={storage.tentarNovamente}>Tentar novamente</button>}</section></main>;
   const resumo = resumir(dados.historico);
   const editar = (item: Lancamento) => { setEditando(item); setFormVersao(v => v + 1); setAba('turno'); setMensagem(''); window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); };
   const excluir = (item: Lancamento) => {
@@ -78,22 +84,22 @@ export function Dashboard({ uid, email, readOnly = false, viewerUid, sharing, es
     : null;
   return <main className={`app ${dados.modoEscuro ? 'escuro' : 'claro'}`}>
     {confirmacao && <Confirmacao titulo={confirmacao.titulo} descricao={confirmacao.descricao} confirmar={confirmacao.confirmar} onCancelar={() => setConfirmacao(undefined)} onConfirmar={() => { confirmacao.executar(); setConfirmacao(undefined); }} />}
-    <CabecalhoApp email={email} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={() => { storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro })); }} onSair={async () => {
+    <CabecalhoApp email={email} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={() => { storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro })); }} onTrocarModulo={onTrocarModulo} onSair={async () => {
       setSaindo(true); try { await storage.aguardar(); await signOut(auth); } catch { setMensagem('A sincronização ainda está pendente. Tente sair novamente em instantes.'); } finally { setSaindo(false); }
     }} />
     {contaView ? <div className="container conteudo">{contaView}</div> : <div className="container conteudo">
       <VerificarEmail />
-      <div className="boas-vindas"><div><p className="sobretitulo">{readOnly ? 'ESPAÇO COMPARTILHADO' : 'GESTÃO FINANCEIRA'}</p><h1>{readOnly ? 'Dados do proprietário' : 'Seu painel de trabalho'}</h1><p>{readOnly ? 'Você está consultando este espaço em modo Somente visualização.' : 'Acompanhe cada turno e dê um destino ao seu dinheiro.'}</p></div>{!readOnly && <button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button>}</div>
-      {onAbrirConta && <div className="espaco-atual" role="status"><span>Espaço atual</span><strong>{readOnly ? 'Compartilhado · Somente visualização' : 'Meus dados'}</strong><button type="button" className="botao discreto" onClick={onAbrirConta}>Trocar espaço</button></div>}
+      <div className="boas-vindas"><div><p className="sobretitulo">{readOnly ? 'ESPAÇO COMPARTILHADO' : 'GESTÃO DO MOTORISTA'}</p><h1>{readOnly ? 'Dados do proprietário' : 'Seu painel de trabalho'}</h1><p>{readOnly ? 'Você está consultando este espaço em modo Somente visualização.' : 'Acompanhe cada turno e dê um destino ao seu dinheiro.'}</p></div><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>{!readOnly && <button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button>}</div></div>
+      {onAbrirConta && <div className="espaco-atual" role="status"><span>Espaço atual</span><strong>{readOnly ? 'Compartilhado · Somente visualização' : 'Meus dados'}</strong><button type="button" className="botao discreto" onClick={onAbrirConta}>Espaços compartilhados</button></div>}
       <div className="barra-status"><span className="ponto" /><p role="status">{storage.status}</p><button type="button" className="botao discreto" onClick={storage.tentarNovamente}>Verificar sincronização</button></div>
       {!readOnly && storage.recuperacoes.length > 0 && <section className="painel aviso"><h2>Cópias locais de outras sessões</h2><p>Há cópias com alterações pendentes neste navegador. Recuperar uma cópia preserva os dados atuais e exige comparação com a nuvem.</p>{storage.recuperacoes.map((copia, indice) => <button key={copia.key} type="button" className="botao secundario" onClick={() => setConfirmacao({ titulo: 'Recuperar cópia local?', descricao: 'Os dados atuais serão preservados antes da recuperação. Nenhuma gravação na nuvem será feita automaticamente.', confirmar: 'Recuperar cópia', executar: () => { if (storage.recuperar(copia.key)) { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); } } })}>Recuperar cópia {indice + 1} ({copia.data.historico.length} lançamentos)</button>)}</section>}
       {storage.erro && <p role="alert" className="mensagem erro">{storage.erro}</p>}
       {!readOnly && storage.conflito && <section className="painel aviso" aria-labelledby="titulo-conflito"><h2 id="titulo-conflito">Escolha a versão dos seus dados</h2><p>Este navegador e a nuvem têm dados diferentes. Compare as versões antes de escolher. Elas não serão mescladas.</p><div className="comparacao-versoes">{[['Neste navegador', dados], ['Na nuvem', storage.dadosNuvem]].map(([nome, versao]) => {
         if (!versao || typeof versao === 'string') return null;
         const resumoVersao = resumir(versao.historico);
-        return <div key={String(nome)}><h3>{String(nome)}</h3><p>{versao.historico.length} lançamentos</p><p>Saldo principal: <strong>{moeda(resumoVersao.liquido)}</strong></p></div>;
+        return <div key={String(nome)}><h3>{String(nome)}</h3><p>{versao.historico.length} lançamentos</p><p>Saldo principal: <strong data-saldo={sinalSaldo(resumoVersao.liquido)}>{moeda(resumoVersao.liquido)}</strong></p></div>;
       })}</div><p>As duas cópias serão guardadas neste navegador antes da troca. A quantidade de lançamentos não indica qual versão é mais recente. Você também pode exportar um backup dos dados em uso.</p>{storage.geracaoAnterior && <p className="mensagem aviso">Esta cópia pertence a uma geração anterior à reinicialização. Exporte-a se precisar consultar os registros antigos. Ela não pode substituir os dados atuais.</p>}<div className="acoes"><button type="button" className="botao primario" disabled={storage.geracaoAnterior} onClick={() => escolher('local')}>Usar dados deste navegador</button><button type="button" className="botao secundario" onClick={() => escolher('nuvem')}>Usar dados da nuvem</button></div></section>}
-      <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque"><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
+      <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque" data-saldo={sinalSaldo(resumo.liquido)}><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
       <nav className="abas" aria-label="Seções do painel">{[['turno','Registrar turno'], ['relatorios','Histórico e relatórios'], ['configuracoes','Custos fixos'], ['privacidade','Privacidade']].map(([id, nome]) => <button type="button" key={id} aria-current={aba === id ? 'page' : undefined} onClick={() => setAba(id)}>{nome}</button>)}</nav>
       {mensagem && <p role="status" className="mensagem sucesso">{mensagem}</p>}
       <div hidden={aba !== 'turno'} className="pilha">
@@ -129,7 +135,48 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
   const sharing = useCompartilhamento(sessao.uid, sessao.email);
   const [espaco, setEspaco] = useState<EspacoSelecionado>('proprio');
   const [contaAberta, setContaAberta] = useState(false);
+  const [modulo, setModulo] = useState<'selecao' | 'motorista' | 'familiar'>('selecao');
+
   const espacoAtivo = espaco !== 'proprio' && sharing.ativos.some(convite => convite.ownerUid === espaco) ? espaco : 'proprio';
   const compartilhado = espacoAtivo !== 'proprio' ? sharing.ativos.find(convite => convite.ownerUid === espacoAtivo) : undefined;
-  return <Dashboard key={`${sessao.uid}-${espacoAtivo}`} uid={compartilhado?.ownerUid || sessao.uid} email={sessao.email} readOnly={Boolean(compartilhado)} viewerUid={sessao.uid} sharing={sharing} espacoSelecionado={espacoAtivo} onSelecionarEspaco={setEspaco} contaAberta={contaAberta} onAbrirConta={() => setContaAberta(value => !value)} />;
+
+  const handleSair = async () => {
+    await signOut(auth);
+  };
+
+  if (modulo === 'selecao') {
+    return (
+      <ModuloSelecao
+        email={sessao.email}
+        onSelecionar={(mod) => setModulo(mod)}
+        onSair={handleSair}
+      />
+    );
+  }
+
+  if (modulo === 'familiar') {
+    return (
+      <GestaoFamiliar
+        email={sessao.email}
+        onVoltar={() => setModulo('selecao')}
+        onSair={handleSair}
+      />
+    );
+  }
+
+  return (
+    <Dashboard
+      key={`${sessao.uid}-${espacoAtivo}`}
+      uid={compartilhado?.ownerUid || sessao.uid}
+      email={sessao.email}
+      readOnly={Boolean(compartilhado)}
+      viewerUid={sessao.uid}
+      sharing={sharing}
+      espacoSelecionado={espacoAtivo}
+      onSelecionarEspaco={setEspaco}
+      contaAberta={contaAberta}
+      onAbrirConta={() => setContaAberta(value => !value)}
+      onTrocarModulo={() => setModulo('selecao')}
+    />
+  );
 }

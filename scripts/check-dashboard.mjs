@@ -10,6 +10,9 @@ async function main() {
   const app = path.join(dir, 'next-app');
   fs.mkdirSync(app, { recursive: true });
   fs.cpSync('src', path.join(app, 'src'), { recursive: true });
+  const demoCiclo = path.join(app, 'src/app/demo-ciclo');
+  fs.mkdirSync(demoCiclo, { recursive: true });
+  fs.writeFileSync(path.join(demoCiclo, 'page.tsx'), "export { default } from '@/components/gestao/DemoCicloCaixinhas';");
   let page = fs.readFileSync('src/app/page.tsx', 'utf8');
   page = page.slice(0, page.indexOf('export default function Home()')) + `
 export default function TestPage() {
@@ -28,6 +31,13 @@ export default function TestPage() {
 import { dadosPadrao } from './gestao';
 const legado = { id: 'legado-1', data: '13/11/2026', diaSemana: 'sexta-feira', tipo: 'turno', descricao: 'Lançamento preservado', faturamentoBruto: 300, combustivel: 40, litros: 10, kmTrabalhado: 100, kmTotal: 110, reservaFevereiro: 2, reservaInvestimento: 3, reservaAcidente: 4.18, custosFixosDia: 15, detalheCustosFixosDia: { '1': 15 }, reservasDiariasDia: [{ id: 'reserva-legada', nome: 'Reserva anterior', valor: 7.5 }], saidas: [], totalDespesas: 71.68, liquido: 228.32 };
 const seed = { ...dadosPadrao(), historico: [legado], lembrete: 'Lembrete preservado' };
+legado.reservasDiariasDia.push(
+  { id: 'homonima-a', nome: 'Reserva repetida', valor: 0 },
+  { id: 'homonima-b', nome: 'Reserva repetida', valor: 0 },
+  { id: '', nome: 'Reserva repetida', valor: 1.25 },
+  { id: 'duplicada', nome: 'Primeira duplicada', valor: 0 },
+  { id: 'duplicada', nome: 'Segunda duplicada', valor: 0 },
+);
 export const doc = () => ({});
 export const getDoc = async () => {
  if (window.__offline) throw new Error('Offline simulado');
@@ -112,6 +122,38 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
     assert.equal(await evaluate('(window.__writes || []).length'), 0, 'Carregar nunca deve gravar na nuvem.');
     const legacy = await evaluate(`JSON.parse(localStorage.getItem('gestao-app-dados-v2-regression-test-nuvem-antes-reconstrucao')).historico[0]`);
     assert.equal(legacy.id, 'legado-1');
+    await evaluate("button('Histórico e relatórios').click(); tick()");
+    const painelPendencias = 'section[aria-labelledby="pendencias-conciliacao-titulo"]';
+    for (const [width, height, mobile] of [[1440, 1000, false], [390, 844, true], [320, 740, true]]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }, sessionId);
+      const pendencias = await evaluate(`(() => {
+        const section = document.querySelector(${JSON.stringify(painelPendencias)});
+        const detalhes = [...section.querySelectorAll('details')];
+        const summary = detalhes[0].querySelector('summary');
+        if (!detalhes[0].open) summary.click();
+        return {
+          aberto: detalhes[0].open, resumo: summary.textContent, textos: detalhes.map(item => item.textContent),
+          controles: section.querySelectorAll('button, input, select, form').length,
+          cabe: document.documentElement.scrollWidth <= innerWidth && section.scrollWidth <= section.clientWidth,
+        };
+      })()`);
+      assert.equal(pendencias.textos.length, 3);
+      assert.equal(pendencias.aberto, true);
+      assert.ok(pendencias.resumo.includes(legacy.data));
+      assert.match(pendencias.resumo, /1,25/);
+      assert.match(pendencias.textos[0], /diaria:homonima-a/);
+      assert.match(pendencias.textos[0], /diaria:homonima-b/);
+      assert.match(pendencias.textos[0], /Pendente de revisão/);
+      assert.match(pendencias.textos[1], /Identificador duplicado.*Referência originalduplicada/);
+      assert.equal(pendencias.controles, 0);
+      assert.equal(pendencias.cabe, true, 'A consulta deve caber em ' + width + ' px.');
+    }
+    assert.equal(await evaluate('(window.__writes || []).length'), 0, 'Consultar pendências não grava.');
+    assert.equal(await evaluate("localStorage.getItem('mock-remote')"), null, 'O histórico simulado deve continuar na cópia original.');
+    assert.deepEqual(await evaluate("JSON.parse(localStorage.getItem('gestao-app-dados-v2-regression-test-nuvem-antes-reconstrucao')).historico[0]"), legacy);
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sessionId);
+    await evaluate("button('Registrar turno').click(); tick()");
+    console.log('PASS: consulta de pendências preserva o histórico, sem gravações, em 1440, 390 e 320 px.');
     const live = await evaluate(`(async () => {
  for (const [nome, valor] of [['Reserva para janeiro','20'], ['PIZZA','18']]) {
   button('+ Adicionar reserva').click(); await tick();
@@ -227,6 +269,54 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
     assert.deepEqual(errors, []);
     console.log('PASS: Next.js real: nomes, R$ 38,00, R$ 3,99/L, 10,30 km/L, excluir/cancelar/recriar, vírgula decimal, navegação preserva formulário, salvar/editar sem duplicar, histórico legado intacto e layout móvel.');
     console.log('PASS: custos preservam histórico; retirada de reserva; falha de rede mantém backup local; recarregar detecta conflito; recuperar sincroniza sem perder registros.');
+    await send('Page.navigate', { url: 'http://127.0.0.1:' + port + '/demo-ciclo' }, sessionId);
+    await evaluate(`new Promise((resolve, reject) => {
+      const limite = Date.now() + 15000;
+      const espera = setInterval(() => {
+        if (document.querySelector('#caixinhas-ativas-demo')) { clearInterval(espera); resolve(true); }
+        else if (Date.now() > limite) { clearInterval(espera); reject(new Error('Demonstração indisponível')); }
+      }, 50);
+    })`);
+    const simular = (texto, campos = {}) => evaluate(`(async () => {
+      const botao = [...document.querySelectorAll('button')].find(e => e.textContent === ${JSON.stringify(texto)});
+      let secao;
+      for (let tentativa = 0; tentativa < 30; tentativa++) {
+        botao.click();
+        await new Promise(r => setTimeout(r, 100));
+        secao = document.querySelector('[aria-labelledby="confirmacao-ciclo-titulo"]');
+        if (secao) break;
+      }
+      if (!secao) throw new Error('Confirmação indisponível para ' + botao.textContent);
+      for (const [nome, valor] of Object.entries(${JSON.stringify(campos)})) secao.querySelector('[name=' + nome + ']').value = valor;
+      const form = secao.querySelector('form');
+      if (form) { form.requestSubmit(); await new Promise(r => setTimeout(r, 80)); }
+      return { texto: secao.innerText, motivoObrigatorio: !!form?.querySelector('textarea[required]') };
+    })()`);
+    await simular('Criar caixinha', { nome: 'Revisão', finalidade: 'Outra finalidade' });
+    assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(e => e.textContent === 'Renomear Revisão').length"), 2);
+    assert.equal((await simular('Renomear Revisão', { nome: 'Revisão anual' })).motivoObrigatorio, true);
+    assert.equal(await evaluate("document.querySelector('form textarea').validity.valueMissing"), true);
+    await evaluate(`(async () => {
+      const form = document.querySelector('form');
+      form.elements.motivo.value = 'Ajuste de descrição';
+      form.requestSubmit();
+      await new Promise(r => setTimeout(r, 80));
+    })()`);
+    assert.match((await simular('Arquivar Combustível')).texto, /transferência explícita/);
+    assert.match((await simular('Arquivar Imprevistos')).texto, /Regularize o saldo negativo/);
+    assert.equal((await simular('Arquivar Revisão anual', { motivo: 'Ciclo encerrado' })).motivoObrigatorio, true);
+    assert.equal((await simular('Reativar Revisão anual', { motivo: 'Novo ciclo' })).motivoObrigatorio, true);
+    const trilha = await evaluate("document.querySelector('[aria-labelledby=caixinhas-arquivadas-demo] ul').innerText");
+    assert.match(trilha, /renomear · diaria:demo-zero.*Revisão.*Revisão anual.*Ajuste de descrição/);
+    assert.match(trilha, /arquivar · diaria:demo-zero.*Ciclo encerrado/);
+    assert.match(trilha, /reativar · diaria:demo-zero.*Novo ciclo/);
+    for (const [width, height, mobile] of [[1440, 1000, false], [390, 844, true], [320, 740, true]]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }, sessionId);
+      assert.equal(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true);
+    }
+    assert.equal(await evaluate('(window.__writes || []).length'), 0);
+    assert.deepEqual(errors, []);
+    console.log('PASS: ciclo fictício, motivos obrigatórios, bloqueios, auditoria e layout em 1440, 390 e 320 px.');
   } finally {
     if (ws) ws.close();
     if (chrome) chrome.kill();

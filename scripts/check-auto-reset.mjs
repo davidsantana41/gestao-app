@@ -92,7 +92,18 @@ async function browser(executable, name) {
     await evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(selector)});if(!input)throw new Error('Missing input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await pause(80);
   };
-  const reload=async()=>{await send('Page.reload',{},sessionId);await wait("Boolean(document.querySelector('.cabecalho'))");};
+  const abrirMotorista=async()=>{
+    const escolha = "[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Acessar gestão do motorista')";
+    await wait(`(${escolha}) || Boolean(document.querySelector('.barra-status'))`);
+    if (await evaluate(escolha)) await click('Acessar gestão do motorista');
+    await wait("Boolean(document.querySelector('.barra-status'))");
+  };
+  const reload=async()=>{
+    await evaluate('window.__appcarAntesDeRecarregar = true');
+    await send('Page.reload',{},sessionId);
+    await wait('window.__appcarAntesDeRecarregar !== true');
+    await abrirMotorista();
+  };
   const screenshot=async label=>{
     const {data}=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true},sessionId);
     fs.writeFileSync(path.join(evidence,name+'-'+label+'.png'),Buffer.from(data,'base64'));
@@ -124,7 +135,7 @@ async function browser(executable, name) {
   await wait("Boolean(document.querySelector('input[name=email]'))");
   await fill('input[name=email]',session.email);await fill('input[name=password]',session.password);
   await evaluate("document.querySelector('form').requestSubmit()");
-  await wait("Boolean(document.querySelector('.cabecalho'))");
+  await abrirMotorista();
   await wait("document.querySelector('.barra-status')?.textContent.includes('Salvo na nuvem')");
   return instance;
 }

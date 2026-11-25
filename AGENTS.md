@@ -30,3 +30,45 @@ Before the final response, run one reporting pass. If candidates remain, from th
 <!-- END:nextjs-agent-feedback -->
 
 Always respond to the user in Brazilian Portuguese (Português do Brasil).
+
+## Autonomia operacional do agente — APPCAR
+
+O agente deve trabalhar de maneira proativa e independente dentro do escopo autorizado pelo usuário.
+
+### Operações autorizadas sem confirmação adicional
+
+- Ler, pesquisar e analisar arquivos do projeto.
+- Executar verificações de TypeScript, ESLint e testes locais seguros.
+- Iniciar e verificar o servidor de desenvolvimento.
+- Investigar erros e apresentar diagnósticos.
+- Quando houver autorização para implementação, criar e editar arquivos necessários dentro do escopo aprovado.
+- Corrigir erros diretamente relacionados à implementação autorizada.
+- Verificar os resultados das alterações.
+
+Não interrompa o trabalho para solicitar confirmação a cada etapa de rotina, desde que a operação esteja dentro do escopo previamente autorizado e seja segura.
+
+### Operações que exigem autorização explícita
+
+- Excluir arquivos ou descartar alterações existentes.
+- Executar comandos destrutivos do Git.
+- Fazer commit, push, merge ou alterar branches remotas.
+- Publicar ou modificar regras do Firebase.
+- Executar deploy na Vercel.
+- Alterar configurações de autenticação ou segurança.
+- Modificar ou excluir dados financeiros.
+- Executar migrações ou reinicializações de dados.
+- Instalar ou atualizar dependências que alterem o projeto.
+
+### Proteção dos dados financeiros
+
+Nunca executar testes destrutivos em produção.
+
+Preservar dados existentes, backups, contas de usuários e isolamento por UID.
+
+Se uma operação apresentar risco de perda de dados, interromper e solicitar autorização.
+
+### Relatório
+
+Execute as tarefas seguras de maneira contínua e apresente um relatório ao concluir, indicando alterações realizadas, testes executados, resultados e eventuais impedimentos.
+
+Estas instruções não substituem as permissões e políticas de segurança da ferramenta utilizada.

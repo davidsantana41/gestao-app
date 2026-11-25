@@ -196,6 +196,10 @@ function dataPascoa(ano: number): Date {
 }
 
 export function diasTrabalhoNoMes(ano: number, mes: number): number {
+  return Math.max(datasTrabalhoNoMes(ano, mes).length, 1);
+}
+
+export function datasTrabalhoNoMes(ano: number, mes: number): number[] {
   const feriados = new Set([
     '01-01', '04-21', '05-01', '09-07', '10-12',
     '11-02', '11-15', '11-20', '12-25',
@@ -203,14 +207,14 @@ export function diasTrabalhoNoMes(ano: number, mes: number): number {
   const sextaSanta = dataPascoa(ano);
   sextaSanta.setDate(sextaSanta.getDate() - 2);
   const totalDias = new Date(ano, mes + 1, 0).getDate();
-  let dias = 0;
+  const dias: number[] = [];
   for (let dia = 1; dia <= totalDias; dia++) {
     const data = new Date(ano, mes, dia);
     if (data.getDay() === 0) continue;
     const chave = `${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
     const ehSextaSanta = data.getMonth() === sextaSanta.getMonth() && data.getDate() === sextaSanta.getDate();
-    if (!feriados.has(chave) && !ehSextaSanta) dias++;
+    if (!feriados.has(chave) && !ehSextaSanta) dias.push(dia);
   }
-  return Math.max(dias, 1);
+  return dias;
 }
 

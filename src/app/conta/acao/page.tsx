@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { applyActionCode, confirmPasswordReset, verifyPasswordResetCode } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { Campo } from '@/components/gestao/Campo';
+import AppcarLogo from '@/components/AppcarLogo';
 
 function FormularioAcao() {
   const parametros = useSearchParams();
@@ -47,7 +48,7 @@ function FormularioAcao() {
   }
 
   return <main className="acesso"><section className="painel auth-card">
-    <div className="marca">A<span>APPCAR<small>Seu trabalho, suas contas.</small></span></div>
+    <AppcarLogo subtitulo="Seu trabalho, suas contas." centralizado />
     <h1>{(concluido || link.modo) === 'verifyEmail' ? 'Confirme seu e-mail.' : 'Redefina sua senha.'}</h1>
     {concluido ? <p className="mensagem sucesso" role="status">{concluido === 'verifyEmail' ? 'E-mail confirmado. Volte ao aplicativo para continuar.' : 'Senha atualizada. Entre no aplicativo com sua nova senha.'}</p> : <form className="pilha" onSubmit={enviar} aria-busy={ocupado}>
       {!valido && <p role="alert" className="mensagem erro">Este link é inválido. Solicite uma nova mensagem no aplicativo.</p>}
