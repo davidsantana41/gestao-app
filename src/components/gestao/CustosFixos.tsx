@@ -1,15 +1,23 @@
 'use client';
-import { useState } from 'react';
-import { moeda, numero, type CustoFixoItem } from '@/lib/gestao';
+import { useRef, useState } from 'react';
+import { moeda, numero, type CustoFixoItem, type DadosPersistidos } from '@/lib/gestao';
 import { Campo, Valor } from './Campo';
 const rascunhoDe = (itens: CustoFixoItem[]) => itens.map(c => ({ ...c, texto: String(c.valorMensal).replace('.', ',') }));
 
-export default function CustosFixos({ itens, onSalvar, readOnly = false }: { itens: CustoFixoItem[]; onSalvar: (itens: CustoFixoItem[], base: CustoFixoItem[]) => boolean; readOnly?: boolean }) {
+export default function CustosFixos({ itens, onSalvar, readOnly = false, versao, onComando, bloquearEnvio }: {
+  itens: CustoFixoItem[]; onSalvar: (itens: CustoFixoItem[], base: CustoFixoItem[]) => boolean; readOnly?: boolean;
+  versao?: DadosPersistidos['_sync']; onComando?: (itens: CustoFixoItem[], base: DadosPersistidos['_sync']) => Promise<boolean>;
+  bloquearEnvio?: boolean;
+}) {
   const [base, setBase] = useState(() => structuredClone(itens));
+  const baseComando = useRef(versao);
   const [draft, setDraft] = useState(() => rascunhoDe(itens));
   const dirty = JSON.stringify(draft) !== JSON.stringify(rascunhoDe(base));
   const rascunho = dirty ? draft : rascunhoDe(itens);
-  const setRascunho = (next: typeof draft) => { if (!dirty) setBase(itens); setDraft(next); };
+  const setRascunho = (next: typeof draft) => {
+    if (!dirty) { setBase(itens); baseComando.current = versao; }
+    setDraft(next);
+  };
   const [erro, setErro] = useState('');
   return <section className="painel">
     <div className="titulo-linha"><div><p className="sobretitulo">PLANEJAMENTO</p><h2>Custos fixos e caixinhas</h2><p className="ajuda">O valor mensal é dividido pelos dias de trabalho do mês do turno.</p></div>{!readOnly && <button type="button" className="botao secundario" onClick={() => setRascunho([...rascunho, { id: crypto.randomUUID(), nome: '', valorMensal: 0, texto: '', cor: '#38bdf8' }])}>+ Adicionar custo</button>}</div>
@@ -19,9 +27,16 @@ export default function CustosFixos({ itens, onSalvar, readOnly = false }: { ite
       <div className="titulo-linha"><Campo label="Cor" type="color" value={c.cor || '#38bdf8'} disabled={readOnly} onChange={e => { const cor = e.currentTarget.value; setRascunho(rascunho.map(r => r.id === c.id ? { ...r, cor } : r)); }} />{!readOnly && <button type="button" className="botao discreto perigo" onClick={() => { if (window.confirm(`Remover ${c.nome || 'este custo'}? Os turnos antigos serão preservados.`)) setRascunho(rascunho.filter(r => r.id !== c.id)); }}>Remover</button>}</div>
     </div>)}</div>
     {!rascunho.length && <p className="vazio">Nenhum custo fixo configurado.</p>}
-    <div className="rodape-painel"><strong>Total mensal: {moeda(rascunho.reduce((s, c) => s + numero(c.texto), 0))}</strong>{!readOnly && <button type="button" className="botao primario" onClick={() => {
+    <div className="rodape-painel"><strong>Total mensal: {moeda(rascunho.reduce((s, c) => s + numero(c.texto), 0))}</strong>{!readOnly && <button type="button" className="botao primario" disabled={bloquearEnvio} onClick={async () => {
       if (rascunho.some(c => !c.nome.trim())) { setErro('Preencha o nome de cada custo.'); return; }
       setErro(''); const novos = rascunho.map(({ texto, ...c }) => ({ ...c, nome: c.nome.trim(), valorMensal: numero(texto) }));
+      if (onComando) {
+        if (await onComando(novos, dirty ? baseComando.current : versao)) {
+          setBase(itens);
+          setDraft(atual => atual === draft ? rascunhoDe(itens) : atual);
+        }
+        return;
+      }
       if (onSalvar(novos, dirty ? base : itens)) { setBase(novos); setDraft(rascunhoDe(novos)); }
     }}>Salvar custos fixos</button>}</div>
     {erro && <p role="alert" className="mensagem erro">{erro}</p>}

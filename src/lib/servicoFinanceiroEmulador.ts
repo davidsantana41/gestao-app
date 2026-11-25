@@ -1,14 +1,15 @@
-import { createHash, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
 import { deleteApp, initializeApp } from 'firebase/app';
-import { collection, connectFirestoreEmulator, doc, getDocFromServer, getDocsFromServer, getFirestore, runTransaction, serverTimestamp, terminate, type Firestore } from 'firebase/firestore';
-import { lerComandoFinanceiro, montarFinanceiro, uuidFinanceiro } from './comandoFinanceiro.ts';
+import { collection, connectFirestoreEmulator, doc, getDocFromServer, getDocsFromServer, getFirestore, query, runTransaction, serverTimestamp, terminate, where, type Firestore } from 'firebase/firestore';
+import { uuidFinanceiro } from './comandoFinanceiro.ts';
 import { lerDados } from './gestao.ts';
-import { caixinhasAfetadas, saldoVerificavelEmCentavos } from './integridadeCaixinhas.ts';
+import { confirmarComando, ErroServico } from './executorFinanceiroServidor.ts';
 import { metadata, version } from './syncSession.ts';
-import { exigirOperacaoAdministrativa, podeExecutarComandoFinanceiro } from './identidadeFinanceiraServidor.ts';
+import { exigirOperacaoAdministrativa } from './identidadeFinanceiraServidor.ts';
 import { criarBackupFinanceiro } from './backupFinanceiroServidor.ts';
 import { ErroAdministrativo, executarAdministracaoEmulador } from './administracaoFinanceiraEmulador.ts';
+import { acaoDeCaixinha, confirmarCaixinha, consultarCaixinhas, validarSaldosConciliados, type TransacaoCatalogo } from './gestaoCaixinhasServidor.ts';
 
 export const projetoFinanceiroEmulador = 'demo-appcar-financeiro';
 const host = '127.0.0.1';
@@ -16,17 +17,6 @@ const portaFirestore = 8091;
 const authEmulador = '127.0.0.1:9097';
 const hubEmulador = '127.0.0.1:4415';
 const duracaoSessaoMs = 5 * 60_000;
-
-class ErroServico extends Error {
-  readonly status: number;
-  readonly codigo?: string;
-
-  constructor(status: number, mensagem: string, codigo?: string) {
-    super(mensagem);
-    this.status = status;
-    this.codigo = codigo;
-  }
-}
 
 async function lerCorpo(req: IncomingMessage, limite = 32_768): Promise<unknown> {
   const partes: Buffer[] = [];
@@ -66,81 +56,39 @@ async function autenticar(entrada: unknown) {
   return identidade.localId;
 }
 
-async function confirmar(db: Firestore, uid: string, espacoId: string, entrada: unknown) {
-  let comando;
-  try {
-    comando = lerComandoFinanceiro(entrada);
-  } catch (erro) {
-    throw new ErroServico(400, (erro as Error).message);
-  }
-  const { revisao, ...intencao } = comando;
-  const assinatura = createHash('sha256').update(version(intencao)).digest('hex');
-  const espaco = doc(db, 'espacosFinanceiros', espacoId);
-  const financeiro = doc(espaco, 'dados', 'main');
-  const evento = doc(espaco, 'operacoes', comando.operacaoId);
+function listarColecao(db: Firestore): TransacaoCatalogo['listar'] {
+  return async (caminho, filtro) => {
+    const ref = collection(db, caminho);
+    const consulta = filtro ? query(ref, where(filtro.campo, filtro.operador, filtro.valor)) : ref;
+    return (await getDocsFromServer(consulta)).docs.map(item => item.data());
+  };
+}
 
-  return runTransaction(db, async tx => {
-    const controle = (await tx.get(espaco)).data();
-    if (!podeExecutarComandoFinanceiro(uid, controle, comando.tipo)) {
-      throw new ErroServico(403, 'Operação não autorizada neste espaço.');
-    }
-    const documento = (await tx.get(financeiro)).data();
-    const sync = metadata(documento);
-    if (!documento?._sync || comando.geracao !== sync.generation) {
-      throw new ErroServico(409, 'Geração financeira divergente.', 'geracao-divergente');
-    }
-    const confirmado = (await tx.get(evento)).data();
-    if (confirmado) {
-      if (confirmado.assinatura !== assinatura || confirmado.autorUid !== uid || confirmado.geracao !== sync.generation) {
-        throw new ErroServico(409, 'ID de operação já utilizado.');
-      }
-      return { operacaoId: comando.operacaoId, revisao: confirmado.revisao as number, repetida: true };
-    }
-    if ((await tx.get(doc(espaco, 'administracao', comando.operacaoId))).exists()) {
-      throw new ErroServico(409, 'ID de operação já utilizado.');
-    }
-    if (revisao !== sync.revision) throw new ErroServico(409, 'Revisão financeira divergente.');
-    const antes = lerDados(documento);
-    const depois = validarMovimentos(() => montarFinanceiro(antes, comando));
-    const { ids, alteraPendencias } = caixinhasAfetadas(antes, depois);
-    if (alteraPendencias) throw new ErroServico(422, 'A alteração afeta referências ambíguas.');
-    const catalogo = await Promise.all(ids.map(async id => {
-      const registro = await tx.get(doc(espaco, 'caixinhas', encodeURIComponent(id)));
-      return { id, dados: registro.data() };
-    }));
-    for (const { id, dados } of catalogo) {
-      if (dados?.id !== id || (dados.estado !== 'ativa' && dados.estado !== 'arquivada')) {
-        throw new ErroServico(422, 'Identidade da caixinha indisponível.');
-      }
-      if (dados.estado === 'arquivada') throw new ErroServico(422, 'Movimentação em caixinha arquivada.');
-      validarMovimentos(() => {
-        const anterior = saldoVerificavelEmCentavos(antes, id);
-        const posterior = saldoVerificavelEmCentavos(depois, id);
-        if (posterior < 0 && posterior < anterior) throw new Error('Saldo insuficiente na caixinha.');
-      });
-    }
-    const proximaRevisao = revisao + 1;
-    const lancamentoId = comando.tipo === 'custos-fixos' ? null
-      : ('alvo' in comando ? comando.alvo : null) ?? comando.operacaoId;
-    tx.set(financeiro, { ...depois, _sync: { ...sync, revision: proximaRevisao } });
-    tx.set(evento, {
-      id: comando.operacaoId, espacoId, assinatura, autorUid: uid, geracao: sync.generation,
-      revisaoAnterior: revisao, revisao: proximaRevisao, tipo: comando.tipo,
-      lancamentoId, caixinhas: ids.sort(), confirmadoEm: serverTimestamp(),
-    });
-    return { operacaoId: comando.operacaoId, revisao: proximaRevisao, repetida: false };
+async function confirmar(db: Firestore, uid: string, espacoId: string, entrada: unknown, gestaoCaixinhas: boolean) {
+  const espaco = 'espacosFinanceiros/' + espacoId;
+  const financeiro = espaco + '/dados/main';
+  const tipo = (entrada as { alteracao?: { tipo?: unknown } } | null)?.alteracao?.tipo;
+  return runTransaction(db, tx => {
+    const adaptador: TransacaoCatalogo = {
+      get: async caminho => (await tx.get(doc(db, caminho))).data(),
+      set: (caminho, dados) => {
+        if (gestaoCaixinhas && caminho === financeiro) tx.set(doc(db, caminho), dados, { mergeFields: Object.keys(dados) });
+        else tx.set(doc(db, caminho), dados);
+      },
+      // As consultas do SDK cliente são protegidas pela leitura transacional da revisão.
+      // Todo comando que altera catálogo ou vínculos incrementa a mesma revisão financeira.
+      listar: listarColecao(db),
+      agora: serverTimestamp,
+    };
+    if (gestaoCaixinhas && acaoDeCaixinha(tipo)) return confirmarCaixinha(adaptador, uid, espaco, financeiro, entrada);
+    return confirmarComando(adaptador, uid, espacoId, financeiro, entrada, gestaoCaixinhas ? {
+      atualizarCampos: true, criarCusto: true,
+      validarSaldos: (antes, depois, ids) => validarSaldosConciliados(adaptador, espaco, antes, depois, ids),
+    } : undefined);
   });
 }
 
-function validarMovimentos<T>(acao: () => T): T {
-  try {
-    return acao();
-  } catch (erro) {
-    throw new ErroServico(422, (erro as Error).message);
-  }
-}
-
-async function consultarEspaco(db: Firestore, uid: string, espacoId: string) {
+async function consultarEspaco(db: Firestore, uid: string, espacoId: string, gestaoCaixinhas: boolean) {
   const espaco = doc(db, 'espacosFinanceiros', espacoId);
   const controle = (await getDocFromServer(espaco)).data();
   if (controle?.proprietarioUid !== uid) throw new ErroServico(403, 'Consulta não autorizada neste espaço.');
@@ -148,11 +96,20 @@ async function consultarEspaco(db: Firestore, uid: string, espacoId: string) {
   const financeiro = doc(espaco, 'dados', 'main');
   const antes = (await getDocFromServer(financeiro)).data();
   if (!antes?._sync) throw new ErroServico(409, 'Financeiro indisponível.');
-  const catalogo = await getDocsFromServer(collection(espaco, 'caixinhas'));
+  const dados = lerDados(antes);
+  const [catalogo, gestao] = await Promise.all([
+    getDocsFromServer(collection(espaco, 'caixinhas')),
+    gestaoCaixinhas ? consultarCaixinhas({ listar: listarColecao(db) }, espaco.path, dados, true) : undefined,
+  ]);
   const [controleAtual, depois] = await Promise.all([getDocFromServer(espaco), getDocFromServer(financeiro)]);
   if (controleAtual.data()?.proprietarioUid !== uid) throw new ErroServico(403, 'Consulta não autorizada neste espaço.');
-  if (version(antes) !== version(depois.data())) throw new ErroServico(409, 'O espaço mudou durante a consulta.');
-  return { financeiro: lerDados(antes), caixinhas: catalogo.docs.map(item => item.data()) };
+  if (version(antes) !== version(depois.data()) || version(controle) !== version(controleAtual.data())) {
+    throw new ErroServico(409, 'O espaço mudou durante a consulta.');
+  }
+  const acoes = controle.comandosFinanceiros && Array.isArray(controle.operacoesFinanceiras)
+    ? controle.operacoesFinanceiras.filter(acaoDeCaixinha) : [];
+  return { financeiro: dados, caixinhas: catalogo.docs.map(item => item.data()),
+    ...(gestao && { gestaoCaixinhas: { ...gestao, acoes } }) };
 }
 
 async function exportarBackup(db: Firestore, uid: string, espacoId: string, chaveId: string, chave: KeyObject) {
@@ -199,7 +156,7 @@ async function exportarBackup(db: Firestore, uid: string, espacoId: string, chav
   return criarBackupFinanceiro({ uid, espacoId, financeiro: inicio.dados, ...colecoes, recibos }, chaveId, chave);
 }
 
-export async function iniciarServicoFinanceiroEmulador() {
+export async function iniciarServicoFinanceiroEmulador({ gestaoCaixinhas = false } = {}) {
   if (process.env.FIRESTORE_EMULATOR_HOST !== `${host}:${portaFirestore}`
       || process.env.FIREBASE_AUTH_EMULATOR_HOST !== authEmulador
       || process.env.FIREBASE_EMULATOR_HUB !== hubEmulador) throw new Error('Use o Emulator Suite financeiro dedicado.');
@@ -243,7 +200,7 @@ export async function iniciarServicoFinanceiroEmulador() {
         throw new ErroServico(403, 'A sessão pertence a outra conta.', 'conta-divergente');
       }
       if (caminho[2] === 'consulta') {
-        res.end(JSON.stringify(await consultarEspaco(db, sessao.uid, caminho[1])));
+        res.end(JSON.stringify(await consultarEspaco(db, sessao.uid, caminho[1], gestaoCaixinhas)));
         return;
       }
       const corpo = await lerCorpo(req, caminho[2] === 'administracao' ? 512_000 : undefined);
@@ -258,7 +215,7 @@ export async function iniciarServicoFinanceiroEmulador() {
         res.end(JSON.stringify(await exportarBackup(db, sessao.uid, caminho[1], chaveBackupId, chaveBackup)));
         return;
       }
-      res.end(JSON.stringify(await confirmar(db, sessao.uid, caminho[1], corpo)));
+      res.end(JSON.stringify(await confirmar(db, sessao.uid, caminho[1], corpo, gestaoCaixinhas)));
     } catch (erro) {
       res.statusCode = erro instanceof ErroServico || erro instanceof ErroAdministrativo ? erro.status : 503;
       res.end(JSON.stringify(erro instanceof ErroServico

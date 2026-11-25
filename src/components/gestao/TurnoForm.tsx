@@ -1,28 +1,40 @@
 'use client';
 
-import { useReducer, useState } from 'react';
+import { useReducer, useRef, useState } from 'react';
 import { calcularTurno, criarTurno, decimal, moeda, novoFormulario, numero, type DadosPersistidos, type Lancamento, type TurnoFormulario } from '@/lib/gestao';
 import { Campo, Valor } from './Campo';
 import { sinalSaldo } from './saldo';
 
 type Acao = { tipo: 'campo'; campo: Exclude<keyof TurnoFormulario, 'reservas'>; valor: string }
-  | { tipo: 'adicionar'; id: string } | { tipo: 'reserva'; id: string; campo: 'nome' | 'valor'; valor: string }
+  | { tipo: 'adicionar'; id: string } | { tipo: 'reserva'; id: string; campo: 'nome' | 'valor'; valor: string; nomeCatalogo?: string }
   | { tipo: 'remover'; id: string };
 function reduzir(form: TurnoFormulario, acao: Acao): TurnoFormulario {
   switch (acao.tipo) {
     case 'campo': return { ...form, [acao.campo]: acao.valor };
     case 'adicionar': return { ...form, reservas: [...form.reservas, { id: acao.id, nome: '', valor: '' }] };
-    case 'reserva': return { ...form, reservas: form.reservas.map(r => r.id === acao.id ? { ...r, [acao.campo]: acao.valor } : r) };
+    case 'reserva': {
+      const reservas = form.reservas.some(r => r.id === acao.id) || acao.nomeCatalogo === undefined
+        ? form.reservas : [...form.reservas, { id: acao.id, nome: acao.nomeCatalogo, valor: '' }];
+      return { ...form, reservas: reservas.map(r => r.id === acao.id ? { ...r, [acao.campo]: acao.valor } : r) };
+    }
     case 'remover': return { ...form, reservas: form.reservas.filter(r => r.id !== acao.id) };
   }
 }
 
-export default function TurnoForm({ dados, original, onSalvar, onCancelar }: {
+export default function TurnoForm({ dados, original, onSalvar, onCancelar, onComando, bloquearEnvio }: {
   dados: DadosPersistidos; original?: Lancamento; onSalvar: (item: Lancamento, base: DadosPersistidos) => void; onCancelar: () => void;
+  onComando?: (form: TurnoFormulario, base: DadosPersistidos) => void; bloquearEnvio?: boolean;
 }) {
-  const [form, dispatch] = useReducer(reduzir, undefined, () => novoFormulario(dados.reservasDiarias, original));
+  const [rascunho, dispatch] = useReducer(reduzir, undefined, () => novoFormulario(dados.reservasDiarias, original));
   const [base] = useState(() => structuredClone(dados));
+  const baseComando = useRef<DadosPersistidos>(null);
   const [erro, setErro] = useState('');
+  const form = onComando && !original ? {
+    ...rascunho,
+    reservas: novoFormulario(dados.reservasDiarias).reservas.map(r => ({
+      ...r, valor: rascunho.reservas.find(item => item.id === r.id)?.valor ?? '',
+    })),
+  } : rascunho;
   const conta = calcularTurno(form, dados.custosFixos, original);
   const campo = (nome: Exclude<keyof TurnoFormulario, 'reservas'>, valor: string) => dispatch({ tipo: 'campo', campo: nome, valor });
   const salvar = (event: React.FormEvent) => {
@@ -34,9 +46,10 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar }: {
       setErro('Preencha o faturamento, o combustível ou uma reserva para salvar.'); return;
     }
     if (!original && dados.historico.some(h => h.tipo === 'turno' && h.data === form.data.split('-').reverse().join('/')) && !window.confirm('Já existe um turno nessa data. Deseja adicionar outro?')) return;
-    onSalvar(criarTurno(form, dados.custosFixos, original?.id ?? crypto.randomUUID(), original), base);
+    if (onComando) onComando(form, original ? base : baseComando.current ?? dados);
+    else onSalvar(criarTurno(form, dados.custosFixos, original?.id ?? crypto.randomUUID(), original), base);
   };
-  return <form onSubmit={salvar} className="turno-grid">
+  return <form onSubmit={salvar} onChangeCapture={() => { if (onComando) baseComando.current ??= dados; }} className="turno-grid">
     <div className="pilha">
       <section className="painel">
         <div className="titulo-linha"><div><p className="sobretitulo">SEU TRABALHO</p><h2>{original ? 'Editar turno' : 'Registrar turno'}</h2></div><span className="selo">{original ? 'Edição' : 'Novo'}</span></div>
@@ -56,12 +69,12 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar }: {
         </div>
       </section>
       <section className="painel">
-        <div className="titulo-linha"><div><h2>Reservas do turno</h2><p className="ajuda">Você escolhe o nome e quanto separar hoje.</p></div><button type="button" className="botao secundario" onClick={() => dispatch({ tipo: 'adicionar', id: crypto.randomUUID() })}>+ Adicionar reserva</button></div>
+        <div className="titulo-linha"><div><h2>Reservas do turno</h2><p className="ajuda">{onComando ? 'Informe os valores para as reservas já cadastradas.' : 'Você escolhe o nome e quanto separar hoje.'}</p></div>{!onComando && <button type="button" className="botao secundario" onClick={() => dispatch({ tipo: 'adicionar', id: crypto.randomUUID() })}>+ Adicionar reserva</button>}</div>
         {form.reservas.length === 0 && <p className="vazio">Nenhuma reserva neste turno.</p>}
         <div className="pilha compacta">{form.reservas.map(r => <div className="linha-reserva" key={r.id} data-testid="reserva">
-          <Campo label="Nome da reserva" value={r.nome} placeholder="Ex.: Manutenção, férias…" onChange={e => dispatch({ tipo: 'reserva', id: r.id, campo: 'nome', valor: e.currentTarget.value })} />
-          <Valor label="Valor (R$)" value={r.valor} onChange={v => dispatch({ tipo: 'reserva', id: r.id, campo: 'valor', valor: v })} />
-          <button type="button" className="botao icone perigo" aria-label={`Excluir reserva ${r.nome || 'nova'}`} onClick={() => { if (window.confirm(`Excluir ${r.nome || 'esta reserva'} do turno?`)) dispatch({ tipo: 'remover', id: r.id }); }}>×</button>
+          <Campo label="Nome da reserva" value={r.nome} readOnly={Boolean(onComando)} placeholder="Ex.: Manutenção, férias…" onChange={e => dispatch({ tipo: 'reserva', id: r.id, campo: 'nome', valor: e.currentTarget.value })} />
+          <Valor label="Valor (R$)" value={r.valor} onChange={v => dispatch({ tipo: 'reserva', id: r.id, campo: 'valor', valor: v, nomeCatalogo: r.nome })} />
+          {!onComando && <button type="button" className="botao icone perigo" aria-label={`Excluir reserva ${r.nome || 'nova'}`} onClick={() => { if (window.confirm(`Excluir ${r.nome || 'esta reserva'} do turno?`)) dispatch({ tipo: 'remover', id: r.id }); }}>×</button>}
         </div>)}</div>
         <div className="total-linha" aria-live="polite"><span>Total das reservas do turno</span><strong data-testid="total-reservas">{moeda(conta.totalReservas)}</strong></div>
         <div className="nota">Depois de salvar, os nomes continuam disponíveis e os valores do próximo turno começam zerados.</div>
@@ -82,10 +95,10 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar }: {
           {conta.saidas.map(s => <div key={s.id}><dt>{s.nome}</dt><dd>{moeda(s.valor)}</dd></div>)}
           <div className="despesas"><dt>Total separado e despesas</dt><dd>{moeda(conta.despesas)}</dd></div>
         </dl>
-        <div className="saldo" data-saldo={sinalSaldo(conta.liquido)}><span>Saldo líquido do turno</span><strong data-testid="saldo-turno">{moeda(conta.liquido)}</strong></div>
+        <div className="saldo" data-saldo={sinalSaldo(conta.liquido)}><span>{onComando ? 'Saldo estimado do turno' : 'Saldo líquido do turno'}</span><strong data-testid="saldo-turno">{moeda(conta.liquido)}</strong></div>
         <p className="nota">Custos mensais divididos por {conta.dias} dias de trabalho. Reserva de acidente: R$ 0,038 × KM total.</p>
         {erro && <p role="alert" className="mensagem erro">{erro}</p>}
-        <button type="submit" className="botao primario largo">{original ? 'Salvar alterações' : 'Salvar turno'}</button>
+        <button type="submit" className="botao primario largo" disabled={bloquearEnvio}>{original ? 'Salvar alterações' : 'Salvar turno'}</button>
         {original && <button type="button" className="botao secundario largo" onClick={onCancelar}>Cancelar edição</button>}
       </section>
     </aside>

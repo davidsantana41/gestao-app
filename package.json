@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "demo:local": "firebase emulators:exec --config firebase.ciclo-emulator.json --project demo-appcar-ciclo --only firestore \"node scripts/iniciar-demonstracao.mjs\"",
+    "demo:financeiro": "firebase emulators:exec --config firebase.financeiro-emulator.json --project demo-appcar-financeiro --only auth,firestore \"node scripts/iniciar-demonstracao.mjs --financeiro\"",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

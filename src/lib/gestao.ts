@@ -80,12 +80,15 @@ export interface TurnoFormulario {
 }
 export function novoFormulario(reservas: ReservaDiariaItem[] = [], original?: Lancamento): TurnoFormulario {
   const texto = (valor: number | undefined) => valor ? String(valor).replace('.', ',') : '';
+  const ativas = original
+    ? (original.reservasDiariasDia ?? [])
+    : reservas.filter(r => !r.id.startsWith('reserva-fixa:') && !r.id.startsWith('meta:') && (r as { estado?: string }).estado !== 'arquivada');
   return {
     data: original ? dataISO(original.data) : dataLocal(),
     faturamento: texto(original?.faturamentoBruto), combustivel: texto(original?.combustivel), litros: texto(original?.litros),
     kmTrabalhado: texto(original?.kmTrabalhado), kmTotal: texto(original?.kmTotal),
     reserva1: texto(original?.reservaFevereiro), reserva2: texto(original?.reservaInvestimento),
-    reservas: (original ? original.reservasDiariasDia ?? [] : reservas).map(r => ({ ...r, valor: original ? texto(r.valor) : '' })),
+    reservas: ativas.map(r => ({ ...r, valor: original ? texto(r.valor) : '' })),
   };
 }
 

@@ -3,6 +3,7 @@ type Comando = Readonly<{ operacaoId: string; geracao: number; revisao: number; 
 type Recibo = Readonly<{ operacaoId: string; revisao: number; repetida: boolean }>;
 type Estado = 'pendente' | 'enviando' | 'confirmado' | 'conflito' | 'rejeitado';
 type Item = { comando: Comando; estado: Estado; recibo?: Recibo; confirmadoEm?: number; motivo?: string };
+export type ItemFilaFinanceira = Item;
 type Envelope = { iv: Uint8Array<ArrayBuffer>; conteudo: ArrayBuffer };
 const schemaCopia = 'appcar-fila-criptografada-v1';
 const credencial = /^(?:authorization|bearer|token|(?:id|access|refresh|session)Token|senha|password|credencia(?:l|is)|credentials?|private[_-]?key|secret|segredo|api[_-]?key|sessionCookie|cookie)$/i;
@@ -41,6 +42,14 @@ async function acessarBanco<T>(modo: IDBTransactionMode, executar: (loja: IDBObj
   }
 }
 
+export async function geracoesDaFila(uid: string, espacoId: string) {
+  const chaves = await acessarBanco('readonly', loja => loja.getAllKeys());
+  return chaves.flatMap(chave => {
+    if (typeof chave !== 'string') return [];
+    const [conta, espaco, geracao] = JSON.parse(chave) as [string, string, number];
+    return conta === uid && espaco === espacoId ? [geracao] : [];
+  });
+}
 async function chaveLocal(segredo: string, contexto: Uint8Array<ArrayBuffer>) {
   const material = await crypto.subtle.importKey('raw', codificador.encode(segredo), 'PBKDF2', false, ['deriveKey']);
   const salt = await crypto.subtle.digest('SHA-256', contexto);
@@ -61,6 +70,7 @@ export async function abrirFilaFinanceiraOffline(opcoes: {
   escopo: Escopo;
   segredoLocal: string;
   obterToken: () => Promise<string | null>;
+  producao?: boolean;
 }) {
   const { uid, espacoId, geracao } = opcoes.escopo;
   const { obterToken } = opcoes;
@@ -110,7 +120,8 @@ export async function abrirFilaFinanceiraOffline(opcoes: {
     const comando = item.comando;
     const token = await obterToken();
     if (!token || !chave) return { estado: 'pendente' as const, motivo: 'Autenticação necessária.' };
-    const resposta = await fetch(`/espacos/${espacoId}/comandos`, {
+    const destino = opcoes.producao ? `/api/financeiro?espaco=${espacoId}` : `/espacos/${espacoId}/comandos`;
+    const resposta = await fetch(destino, {
       method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(12_000),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Appcar-Conta-Fila': uid },
       body: JSON.stringify(comando),
@@ -175,12 +186,13 @@ export async function abrirFilaFinanceiraOffline(opcoes: {
         return structuredClone(item);
       });
     },
-    enviarProximo: () => comFila(async (itens, salvar) => {
+    enviarProximo: (aoEnviar?: (item: Item) => void) => comFila(async (itens, salvar) => {
       const indice = itens.findIndex(item => item.estado === 'enviando' || item.estado === 'pendente');
       if (indice < 0) return undefined;
       const comando = itens[indice].comando;
       itens[indice] = { comando, estado: 'enviando' };
       await salvar();
+      aoEnviar?.(structuredClone(itens[indice]));
       let resultado;
       try {
         resultado = await enviar(itens[indice]);

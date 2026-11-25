@@ -51,7 +51,7 @@ export function ConfirmacaoCiclo({ selecao, onCancelar, onConfirmar, persistente
 
   return <section className="painel" aria-labelledby="confirmacao-ciclo-titulo">
     <h2 id="confirmacao-ciclo-titulo" ref={titulo} tabIndex={-1}>{rotulos[acao]} {caixinha?.nome ?? 'caixinha'}</h2>
-    {caixinha && <p className="ajuda">{caixinha.id} · {Number.isFinite(saldo) ? `Saldo ${moeda(saldo)}` : 'Saldo pendente de conciliação'}</p>}
+    {caixinha && <p className="ajuda">{caixinha.id} · {Number.isFinite(saldo) ? `Saldo ${moeda(saldo)}` : 'Saldo em revisão'}</p>}
     {bloqueio ? <>
       <p className="mensagem aviso">{bloqueio}</p>
       <button type="button" className="botao secundario" onClick={onCancelar}>Voltar</button>

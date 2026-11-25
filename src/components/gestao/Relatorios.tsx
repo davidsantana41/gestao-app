@@ -1,20 +1,28 @@
 import { dataISO, decimal, moeda, resultado, resumir, type DadosPersistidos, type Lancamento } from '@/lib/gestao';
 import { sinalSaldo } from './saldo';
 import PendenciasConciliacao from './PendenciasConciliacao';
+import type { LeituraCaixinhas } from '@/lib/useFinanceiroIntegrado';
 
 export function Historico({ itens, onEditar, onExcluir }: { itens: Lancamento[]; onEditar?: (item: Lancamento) => void; onExcluir?: (item: Lancamento) => void }) {
   return <section className="painel"><div className="titulo-linha"><h2>Histórico de lançamentos</h2><span className="selo">{itens.length} registros</span></div>
-    {itens.length > 0 && <p className="dica-rolagem">Deslize a tabela para ver todas as colunas.</p>}
-    {!itens.length ? <p className="vazio">Seus lançamentos salvos aparecerão aqui.</p> : <div className="tabela-scroll" tabIndex={0} role="region" aria-label="Histórico de lançamentos, role para ver todas as colunas"><table><caption className="somente-leitor">Histórico de lançamentos</caption><thead><tr><th scope="col">Data</th><th scope="col">Lançamento</th><th scope="col">Faturamento / valor</th><th scope="col">Despesas e reservas</th><th scope="col">Saldo principal</th><th scope="col">Ações</th></tr></thead><tbody>{itens.map(h => {
+    {!itens.length ? <p className="vazio">Seus lançamentos salvos aparecerão aqui.</p> : <div className="tabela-scroll" tabIndex={0} role="region" aria-label="Histórico de lançamentos"><table className="historico-tabela" role="table"><caption className="somente-leitor">Histórico de lançamentos</caption><thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Data</th><th role="columnheader" scope="col">Lançamento</th><th role="columnheader" scope="col">Faturamento / valor</th><th role="columnheader" scope="col">Despesas e reservas</th><th role="columnheader" scope="col">Saldo principal</th><th role="columnheader" scope="col">Ações</th></tr></thead><tbody role="rowgroup">{itens.map(h => {
       const r = resultado(h);
-      return <tr key={h.id}><td>{h.data}<small>{h.diaSemana}</small></td><td>{h.tipo === 'turno' ? 'Turno de trabalho' : h.descricao}<small>{h.tipo === 'turno' ? (h.reservasDiariasDia ?? []).map(r => `${r.nome || 'Reserva antiga'}: ${moeda(r.valor)}`).join(' · ') : h.tipo === 'avulso_entrada' ? 'Entrada avulsa' : 'Saída avulsa'}</small></td>
-        <td>{moeda(h.tipo === 'avulso_saida' ? (h.saidas ?? []).reduce((s, r) => s + r.valor, 0) : h.faturamentoBruto)}</td><td>{moeda(r.despesas)}</td><td data-saldo={sinalSaldo(r.liquido)}>{moeda(r.liquido)}</td>
-        <td><div className="acoes">{onEditar && h.tipo === 'turno' && <button type="button" className="botao discreto" onClick={() => onEditar(h)}>Editar</button>}{onExcluir && <button type="button" className="botao discreto perigo" onClick={() => onExcluir(h)}>Excluir</button>}</div></td></tr>;
+      return <tr key={h.id} role="row">
+        <td role="cell" data-coluna="Data"><div>{h.data}<small>{h.diaSemana}</small></div></td>
+        <td role="cell" data-coluna="Lançamento"><div>{h.tipo === 'turno' ? 'Turno de trabalho' : h.descricao}<small>{h.tipo === 'turno' ? (h.reservasDiariasDia ?? []).map(r => `${r.nome || 'Reserva antiga'}: ${moeda(r.valor)}`).join(' · ') : h.tipo === 'avulso_entrada' ? 'Entrada avulsa' : 'Saída avulsa'}</small></div></td>
+        <td role="cell" data-coluna="Faturamento / valor">{moeda(h.tipo === 'avulso_saida' ? (h.saidas ?? []).reduce((s, r) => s + r.valor, 0) : h.faturamentoBruto)}</td>
+        <td role="cell" data-coluna="Despesas e reservas">{moeda(r.despesas)}</td>
+        <td role="cell" data-coluna="Saldo principal" data-saldo={sinalSaldo(r.liquido)}>{moeda(r.liquido)}</td>
+        <td role="cell">{(onExcluir || (onEditar && h.tipo === 'turno')) && <div className="acoes">{onEditar && h.tipo === 'turno' && <button type="button" className="botao discreto" onClick={() => onEditar(h)}>Editar</button>}{onExcluir && <button type="button" className="botao discreto perigo" onClick={() => onExcluir(h)}>Excluir</button>}</div>}</td>
+      </tr>;
     })}</tbody></table></div>}
   </section>;
 }
 
-export default function Relatorios({ dados, mes, onMes, onEditar, onExcluir }: { dados: DadosPersistidos; mes: string; onMes: (mes: string) => void; onEditar?: (item: Lancamento) => void; onExcluir?: (item: Lancamento) => void }) {
+export default function Relatorios({ dados, caixinhas, onVerCaixinhas, mes, onMes, onEditar, onExcluir }: {
+  dados: DadosPersistidos; caixinhas?: LeituraCaixinhas['relatorio']; onVerCaixinhas?: () => void;
+  mes: string; onMes: (mes: string) => void; onEditar?: (item: Lancamento) => void; onExcluir?: (item: Lancamento) => void;
+}) {
   const itens = dados.historico.filter(h => !mes || dataISO(h.data).startsWith(mes));
   const r = resumir(itens);
   const acumulado = resumir(dados.historico);
@@ -33,8 +41,21 @@ export default function Relatorios({ dados, mes, onMes, onEditar, onExcluir }: {
       <div className="metrica"><span>Dias trabalhados</span><strong>{r.dias}</strong></div>
     </div>
     <section className="painel"><h2>Indicadores do período</h2><div className="grade-metricas pequena"><div><span>Combustível</span><strong>{moeda(r.combustivel)}</strong></div><div><span>KM trabalhados</span><strong>{decimal(r.km)}</strong></div><div><span>Preço médio por litro</span><strong>{r.litros ? `${moeda(r.combustivel / r.litros)}/L` : '—'}</strong></div><div><span>Consumo médio</span><strong>{r.litros ? `${decimal(r.km / r.litros)} km/L` : '—'}</strong></div></div></section>
-    <section className="painel"><h2>Reservas e caixinhas acumuladas</h2><p className="ajuda">Saldo de todo o histórico, já descontadas as retiradas.</p><div className="grade-custos reservas-acumuladas">{Object.entries(acumulado.caixinhas).map(([id, valor]) => <div className="custo-item reserva-acumulada" key={id} style={{ borderTopColor: dados.custosFixos.find(c => c.id === id)?.cor || undefined }}><span>{nomes[id] || 'Caixinha anterior'}</span><strong data-saldo={sinalSaldo(valor)}>{moeda(valor)}</strong></div>)}{Object.entries(acumulado.reservas).map(([id, r]) => <div className="custo-item reserva-acumulada" key={id}><span>{r.nome}</span><strong data-saldo={sinalSaldo(r.valor)}>{moeda(r.valor)}</strong></div>)}</div>{!dados.historico.length && <p className="vazio">As reservas aparecerão depois de salvar um turno.</p>}</section>
-    <PendenciasConciliacao dados={dados} />
+    {caixinhas ? <section className="painel pilha compacta">
+      <h2>Reservas e caixinhas acumuladas</h2>
+      <p className="ajuda">Saldo de todo o histórico, com retiradas e vínculos confirmados.</p>
+      <div className="grade-custos reservas-acumuladas">{caixinhas.caixinhas.map(caixa =>
+        <div className="custo-item reserva-acumulada" key={caixa.id}>
+          <span>{caixa.nome}</span>
+          <strong data-saldo={caixa.saldoAtestado ? sinalSaldo(caixa.saldo) : undefined}>{caixa.saldoAtestado ? moeda(caixa.saldo) : 'Em revisão'}</strong>
+        </div>)}
+      </div>
+      {caixinhas.totalPendencias > 0 && <p>Movimentações para revisar ({caixinhas.totalPendencias}).</p>}
+      {onVerCaixinhas && <button type="button" className="botao secundario" onClick={onVerCaixinhas}>Ver caixinhas</button>}
+    </section> : <>
+      <section className="painel"><h2>Reservas e caixinhas acumuladas</h2><p className="ajuda">Saldo de todo o histórico, já descontadas as retiradas.</p><div className="grade-custos reservas-acumuladas">{Object.entries(acumulado.caixinhas).map(([id, valor]) => <div className="custo-item reserva-acumulada" key={id} style={{ borderTopColor: dados.custosFixos.find(c => c.id === id)?.cor || undefined }}><span>{nomes[id] || 'Caixinha anterior'}</span><strong data-saldo={sinalSaldo(valor)}>{moeda(valor)}</strong></div>)}{Object.entries(acumulado.reservas).map(([id, r]) => <div className="custo-item reserva-acumulada" key={id}><span>{r.nome}</span><strong data-saldo={sinalSaldo(r.valor)}>{moeda(r.valor)}</strong></div>)}</div>{!dados.historico.length && <p className="vazio">As reservas aparecerão depois de salvar um turno.</p>}</section>
+      <PendenciasConciliacao dados={dados} />
+    </>}
     <Historico itens={itens} onEditar={onEditar} onExcluir={onExcluir} />
     {[['Resultados por mês', porMes], ['Resultados por ano', porAno]] .map(([titulo, grupos]) => <section className="painel" key={String(titulo)}><h2>{String(titulo)}</h2><div className="tabela-scroll" tabIndex={0} role="region" aria-label={String(titulo)}><table><caption className="somente-leitor">{String(titulo)}</caption><thead><tr><th scope="col">Período</th><th scope="col">Dias</th><th scope="col">Faturamento</th><th scope="col">Despesas e reservas</th><th scope="col">Saldo líquido</th></tr></thead><tbody>{Object.entries(grupos).sort(([a], [b]) => b.localeCompare(a)).map(([periodo, itens]) => { const total = resumir(itens as Lancamento[]); return <tr key={periodo}><td>{periodo}</td><td>{total.dias}</td><td>{moeda(total.faturamento)}</td><td>{moeda(total.despesas)}</td><td data-saldo={sinalSaldo(total.liquido)}>{moeda(total.liquido)}</td></tr>; })}</tbody></table></div></section>)}
   </div>;

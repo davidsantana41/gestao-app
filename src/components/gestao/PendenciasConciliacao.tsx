@@ -21,9 +21,9 @@ export default function PendenciasConciliacao({ dados }: { dados: DadosPersistid
   const pendencias = revisarPendenciasCaixinhas(dados);
   return (
     <section className="painel" aria-labelledby="pendencias-conciliacao-titulo">
-      <h2 id="pendencias-conciliacao-titulo">Pendências de conciliação</h2>
-      {pendencias.length === 0 ? <p className="ajuda">Nenhuma pendência identificada.</p> : <>
-        <p className="ajuda">Consulta de todo o histórico. As possíveis relações servem apenas para revisão e não alteram os saldos.</p>
+      <h2 id="pendencias-conciliacao-titulo">Movimentações para revisar</h2>
+      {pendencias.length === 0 ? <p className="ajuda">Nenhuma movimentação precisa de revisão.</p> : <>
+        <p className="ajuda">Veja movimentações antigas cuja caixinha ainda precisa ser confirmada. As sugestões ajudam na revisão.</p>
         <ul className="pilha compacta lista-conciliacao">
           {pendencias.map(({ motivo, evidencia, referenciaOriginal, candidatos }, indice) => (
             <li key={JSON.stringify([motivo, referenciaOriginal, evidencia, indice])}>
