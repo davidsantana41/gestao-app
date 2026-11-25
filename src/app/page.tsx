@@ -290,11 +290,30 @@ export default function Home() {
 function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | null } }) {
   const sharing = useCompartilhamento(sessao.uid, sessao.email);
   const [espaco, setEspaco] = useState<EspacoSelecionado>('proprio');
+  const [verificacaoFinanceiro, setVerificacaoFinanceiro] = useState<{
+    uid: string; hashEsperado: string; autorizado: boolean;
+  } | null>(null);
   const [contaAberta, setContaAberta] = useState(false);
   const [modulo, setModulo] = useState<'selecao' | 'motorista' | 'familiar'>('selecao');
 
   const espacoAtivo = espaco !== 'proprio' && sharing.ativos.some(convite => convite.ownerUid === espaco) ? espaco : 'proprio';
   const compartilhado = espacoAtivo !== 'proprio' ? sharing.ativos.find(convite => convite.ownerUid === espacoAtivo) : undefined;
+
+  useEffect(() => {
+    let vigente = true;
+    const esperado = process.env.NEXT_PUBLIC_APPCAR_FINANCEIRO_UID_SHA256?.toLowerCase();
+    if (espacoAtivo !== 'proprio' || !esperado || !/^[a-f0-9]{64}$/.test(esperado) || !globalThis.crypto?.subtle) {
+      return () => { vigente = false; };
+    }
+    void globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessao.uid))
+      .then(hash => {
+        if (!vigente) return;
+        const atual = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+        setVerificacaoFinanceiro({ uid: sessao.uid, hashEsperado: esperado, autorizado: atual === esperado });
+      })
+      .catch(() => { if (vigente) setVerificacaoFinanceiro({ uid: sessao.uid, hashEsperado: esperado, autorizado: false }); });
+    return () => { vigente = false; };
+  }, [espacoAtivo, sessao.uid]);
 
   const handleSair = async () => {
     await signOut(auth);
@@ -320,7 +339,12 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
     );
   }
 
-  const Painel = process.env.NEXT_PUBLIC_APPCAR_FINANCEIRO_PRODUCAO === '1' ? ResolverDashboard : Dashboard;
+  const hashFinanceiroConfigurado = process.env.NEXT_PUBLIC_APPCAR_FINANCEIRO_UID_SHA256?.toLowerCase();
+  const financeiroAutorizado = espacoAtivo === 'proprio'
+    && verificacaoFinanceiro?.uid === sessao.uid
+    && verificacaoFinanceiro.hashEsperado === hashFinanceiroConfigurado
+    && verificacaoFinanceiro.autorizado;
+  const Painel = financeiroAutorizado ? ResolverDashboard : Dashboard;
   return (
     <Painel
       key={`${sessao.uid}-${espacoAtivo}`}
@@ -330,7 +354,7 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
       viewerUid={sessao.uid}
       sharing={sharing}
       espacoSelecionado={espacoAtivo}
-      onSelecionarEspaco={setEspaco}
+      onSelecionarEspaco={valor => { setVerificacaoFinanceiro(null); setEspaco(valor); }}
       contaAberta={contaAberta}
       onAbrirConta={() => setContaAberta(value => !value)}
       onTrocarModulo={() => setModulo('selecao')}
