@@ -1,5 +1,5 @@
 import { criarTurno, dataBR, datasTrabalhoNoMes, resumir, type DadosPersistidos, type Lancamento } from './gestao.ts';
-import { arredondarRazaoEmCentavos, centavosParaReais, distribuirCentavos, reaisParaCentavos, somarCentavos } from './centavosFinanceiros.ts';
+import { arredondarRazaoEmCentavos, centavosParaReais, distribuirCentavos, reaisParaCentavos, somarCentavos, somarHistoricoEmCentavos } from './centavosFinanceiros.ts';
 
 export const uuidFinanceiro = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const maxCentavos = 100_000_000_000;
@@ -178,15 +178,15 @@ export function montarFinanceiro(dados: DadosPersistidos, comando: ComandoFinanc
     const nomesOriginais = new Map(anterior?.reservasDiariasDia?.map(r => [r.id, r.nome]));
     item.reservasDiariasDia = item.reservasDiariasDia?.map(r => ({ ...r, nome: nomesOriginais.get(r.id) ?? r.nome }));
     const detalhe = anterior ? item.detalheCustosFixosDia ?? {} : rateiosDoTurno(dados, comando.form.data, item);
-    const porCusto = somarCentavos(Object.values(detalhe).map(centavosNaoNegativos));
-    const fixos = anterior ? centavosNaoNegativos(anterior.custosFixosDia) : porCusto;
+    const fixos = anterior ? somarHistoricoEmCentavos([anterior.custosFixosDia])
+      : somarCentavos(Object.values(detalhe).map(centavosNaoNegativos));
     const acidente = arredondarRazaoEmCentavos(reaisParaCentavos(item.kmTotal) * 38, 1000);
     const despesas = somarCentavos([
       fixos, acidente, ...[item.combustivel, item.reservaFevereiro, item.reservaInvestimento,
         ...(item.reservasDiariasDia ?? []).map(r => r.valor), ...(item.saidas ?? []).map(s => s.valor)].map(centavosNaoNegativos),
     ]);
     item.detalheCustosFixosDia = detalhe;
-    item.custosFixosDia = centavosParaReais(fixos);
+    item.custosFixosDia = anterior?.custosFixosDia ?? centavosParaReais(fixos);
     item.reservaAcidente = centavosParaReais(acidente);
     item.totalDespesas = centavosParaReais(despesas);
     item.liquido = centavosParaReais(somarCentavos([centavosNaoNegativos(item.faturamentoBruto), -despesas]));

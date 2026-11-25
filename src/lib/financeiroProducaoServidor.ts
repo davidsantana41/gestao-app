@@ -16,6 +16,8 @@ import { criarAutenticadorFirebase } from './identidadeFinanceiraServidor';
 const projeto = 'appcar-a0886';
 const nomeApp = 'appcar-financeiro-producao';
 type Registro = Record<string, unknown>;
+let validacaoOidc: Promise<unknown> | undefined;
+let proximaValidacao = 0;
 
 function listarColecao(db: Firestore, tx: Transaction): TransacaoCatalogo['listar'] {
   return async (caminho, filtro) => {
@@ -65,6 +67,17 @@ async function infraestrutura() {
   const app = getApps().find(item => item.name === nomeApp)
     ?? initializeApp({ projectId: projeto, credential: applicationDefault() }, nomeApp);
   if (app.options.projectId !== projeto) throw new ErroServico(503, 'Projeto financeiro divergente.');
+  if (process.env.VERCEL_ENV === 'production') {
+    if (!validacaoOidc || Date.now() >= proximaValidacao) {
+      proximaValidacao = Date.now() + 30_000;
+      validacaoOidc = applicationDefault().getAccessToken().then(() => {
+        proximaValidacao = Date.now() + 5 * 60_000;
+      }).catch(() => {
+        throw new ErroServico(503, 'A identidade do serviço financeiro não pôde ser validada.', 'oidc-indisponivel');
+      });
+    }
+    await validacaoOidc;
+  }
   const adminAuth = getAuth(app);
   return {
     db: getFirestore(app),

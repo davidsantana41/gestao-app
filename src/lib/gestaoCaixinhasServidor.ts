@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { uuidFinanceiro } from './comandoFinanceiro.ts';
 import { projetarCatalogoCaixinhas, revisarPendenciasCaixinhas, type IdCaixinha } from './catalogoCaixinhas.ts';
 import { conferirReferenciaMovimentacao, referenciarMovimentacao, type ReferenciaMovimentacao } from './referenciaMovimentacao.ts';
-import { reaisParaCentavos, somarCentavos } from './centavosFinanceiros.ts';
+import { centavosParaReais, somarCentavos, somarHistoricoEmCentavos } from './centavosFinanceiros.ts';
 import { lerDados, type DadosPersistidos } from './gestao.ts';
 import { metadata, version } from './syncSession.ts';
 import { ErroServico, type TransacaoFinanceira } from './executorFinanceiroServidor.ts';
@@ -85,9 +85,9 @@ async function pendenciasDoEspaco(dados: DadosPersistidos, vinculos: Vinculo[]) 
 }
 
 function saldo(evidencias: readonly Evidencia[]) {
-  return somarCentavos(evidencias.filter(e => e.fonte !== 'configuracao').map(e => {
-    const valor = reaisParaCentavos(e.valor);
-    if (valor < 0) throw new Error('Valor histórico negativo.');
+  return somarHistoricoEmCentavos(evidencias.filter(e => e.fonte !== 'configuracao').map(e => {
+    const valor = e.valor;
+    if (!Number.isFinite(valor) || valor < 0) throw new Error('Valor histórico inválido.');
     return e.fonte === 'retirada' ? -valor : valor;
   }));
 }
@@ -166,16 +166,25 @@ export async function consultarCaixinhas(tx: Pick<TransacaoCatalogo, 'listar'>, 
     const cadastro = persistidas.get(caixa.id);
     if (cadastro?.estado === 'excluida') return [];
     const estado = cadastro?.estado === 'arquivada' ? 'arquivada' as const : 'ativa' as const;
-    const saldoAtestado = caixa.saldoAtestado && relatorio.pendencias.length === 0;
+    let saldoCentavos = caixa.saldoCentavos;
+    let totalCreditos = caixa.totalCreditos;
+    let totalDebitos = caixa.totalDebitos;
+    let saldoAtestado = relatorio.pendencias.length === 0;
+    try {
+      saldoCentavos = saldoComVinculos(dados, caixa.id, vinculos);
+      totalCreditos = centavosParaReais(somarHistoricoEmCentavos(caixa.movimentos.filter(m => m.valor >= 0).map(m => m.valor)));
+      totalDebitos = centavosParaReais(somarHistoricoEmCentavos(caixa.movimentos.filter(m => m.valor < 0).map(m => -m.valor)));
+    } catch { saldoAtestado = false; }
     const motivoSaldo = saldoAtestado ? undefined : 'Revise as pendências e os valores históricos antes de confirmar o saldo.';
     const configurada = caixa.familia !== 'diaria' && projecao.caixinhas.some(c => c.id === caixa.id && c.configurada);
     const editavel = cadastro?.estado === 'ativa' || cadastro?.estado === 'arquivada';
     const motivo = !editavel ? 'A identidade precisa ser cadastrada pelo operador do espaço.'
-      : motivoSaldo ?? (caixa.saldoCentavos !== 0 ? 'Zere o saldo por uma movimentação válida.'
+      : motivoSaldo ?? (saldoCentavos !== 0 ? 'Zere o saldo por uma movimentação válida.'
         : configurada ? 'Desative a configuração de rateio ou reserva associada.' : undefined);
     const motivoExclusao = motivo ?? (caixa.movimentos.length || auditoria.some(evento => evento.caixinhaId === caixa.id && evento.lancamentoId)
       ? 'Use Desativar para preservar as movimentações.' : undefined);
     return [{ ...caixa, estado, editavel, nome: cadastro?.nome ?? caixa.nome, finalidade: cadastro?.finalidade ?? '',
+      saldoCentavos, saldo: centavosParaReais(saldoCentavos), totalCreditos, totalDebitos,
       auditoria: auditoria.filter(evento => evento.caixinhaId === caixa.id), saldoAtestado, motivoSaldoNaoAtestado: motivoSaldo,
       podeArquivar: !motivo, motivoBloqueioArquivamento: motivo, podeExcluir: !motivoExclusao, motivoBloqueioExclusao: motivoExclusao }];
   });

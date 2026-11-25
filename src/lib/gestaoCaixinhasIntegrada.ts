@@ -1,5 +1,5 @@
 import { projetarCatalogoCaixinhas, revisarPendenciasCaixinhas, type IdCaixinha } from './catalogoCaixinhas.ts';
-import { reaisParaCentavos, centavosParaReais, somarCentavos } from './centavosFinanceiros.ts';
+import { centavosParaReais, somarHistoricoEmCentavos } from './centavosFinanceiros.ts';
 import { moeda, type DadosPersistidos, type ReservaDiariaItem, type CustoFixoItem } from './gestao.ts';
 
 export type EventoAuditoriaCaixinha = {
@@ -358,22 +358,14 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
 
     let creditosCentavos = 0;
     let debitosCentavos = 0;
-
-    for (const m of movimentos) {
-      try {
-        const cent = reaisParaCentavos(Math.abs(m.valor));
-        if (m.valor >= 0) {
-          creditosCentavos = somarCentavos([creditosCentavos, cent]);
-        } else {
-          debitosCentavos = somarCentavos([debitosCentavos, cent]);
-        }
-      } catch {
-        saldoAtestado = false;
-        motivoSaldoNaoAtestado = 'Valores com fração ou inconsistência no histórico. Saldo não atestado.';
-      }
+    try {
+      creditosCentavos = somarHistoricoEmCentavos(movimentos.filter(m => m.valor >= 0).map(m => m.valor));
+      debitosCentavos = somarHistoricoEmCentavos(movimentos.filter(m => m.valor < 0).map(m => -m.valor));
+      saldoCentavos = creditosCentavos - debitosCentavos;
+    } catch {
+      saldoAtestado = false;
+      motivoSaldoNaoAtestado = 'Valores ou referências inconsistentes no histórico. Saldo não atestado.';
     }
-
-    saldoCentavos = creditosCentavos - debitosCentavos;
     const saldo = centavosParaReais(saldoCentavos);
 
     if (estado === 'ativa') {

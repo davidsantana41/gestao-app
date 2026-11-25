@@ -10,6 +10,29 @@ export function somarCentavos(valores: Iterable<number>): number {
   return Number(total);
 }
 
+/** Mantém a precisão dos rateios legados e arredonda apenas o total, em centavos. */
+export function somarHistoricoEmCentavos(valores: Iterable<number>): number {
+  let total = BigInt(0);
+  let escala = 0;
+  for (const valor of valores) {
+    const partes = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/.exec(String(valor));
+    if (!partes || !Number.isSafeInteger(Math.round(valor * 100))) throw new Error('Valor histórico inválido.');
+    const [, sinal, inteiro, decimal = '', notacao = '0'] = partes;
+    const expoente = Number(notacao) - decimal.length + 2;
+    if (Math.abs(expoente) > 308) throw new Error('Precisão histórica fora do limite seguro.');
+    if (expoente < escala) {
+      total *= BigInt(10) ** BigInt(escala - expoente);
+      escala = expoente;
+    }
+    total += BigInt(sinal + inteiro + decimal) * BigInt(10) ** BigInt(expoente - escala);
+  }
+  const divisor = BigInt(10) ** BigInt(-escala);
+  const absoluto = total < BigInt(0) ? -total : total;
+  const arredondado = (absoluto + divisor / BigInt(2)) / divisor;
+  if (arredondado > limiteSeguro) throw new Error('Total histórico fora do limite seguro.');
+  return Number(total < BigInt(0) ? -arredondado : arredondado);
+}
+
 /** Aceita apenas valores cujo decimal armazenado já representa centavos exatos. */
 export function reaisParaCentavos(valor: unknown): number {
   const decimal = typeof valor === 'number' ? /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(String(valor)) : null;
