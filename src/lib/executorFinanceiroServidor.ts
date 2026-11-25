@@ -58,6 +58,9 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
   }
   if (revisao !== sync.revision) throw new ErroServico(409, 'Revisão financeira divergente.');
   const antes = lerDados(documento);
+  if (opcoes?.atualizarCampos && comando.tipo === 'excluir') {
+    throw new ErroServico(422, 'Use Estornar para preservar o lançamento e seu histórico.');
+  }
   if (opcoes?.atualizarCampos && comando.tipo === 'turno' && !comando.alvo) {
     const reservas = new Map(antes.reservasDiarias?.map(r => [r.id, r.nome]));
     for (const reserva of comando.form.reservas) {
@@ -99,9 +102,13 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
     });
   }
   const proximaRevisao = revisao + 1;
-  const lancamentoId = comando.tipo === 'custos-fixos' ? null
+  const lancamentoId = comando.tipo === 'custos-fixos' || comando.tipo === 'preferencias' ? null
     : ('alvo' in comando ? comando.alvo : null) ?? comando.operacaoId;
-  const campos = comando.tipo === 'custos-fixos' ? { custosFixos: depois.custosFixos } : { historico: depois.historico };
+  const campos = comando.tipo === 'custos-fixos' ? { custosFixos: depois.custosFixos }
+    : comando.tipo === 'preferencias'
+      ? { ...(comando.modoEscuro !== undefined && { modoEscuro: depois.modoEscuro }),
+        ...(comando.lembrete !== undefined && { lembrete: depois.lembrete }) }
+      : { historico: depois.historico };
   const _sync = { ...sync, revision: proximaRevisao };
   tx.set(financeiro, opcoes?.atualizarCampos ? { ...campos, _sync } : { ...depois, _sync });
   for (const id of criar) tx.set(espaco + '/caixinhas/' + encodeURIComponent(id), { id, estado: 'ativa' });
@@ -109,6 +116,11 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
     id: comando.operacaoId, espacoId, assinatura, autorUid: uid, geracao: sync.generation,
     revisaoAnterior: revisao, revisao: proximaRevisao, tipo: comando.tipo,
     lancamentoId, caixinhas: ids.sort(), confirmadoEm: tx.agora(),
+    ...((comando.tipo === 'estornar' || (comando.tipo === 'turno' && comando.alvo)) && {
+      antes: antes.historico.find(h => h.id === lancamentoId) ?? null,
+      depois: depois.historico.find(h => h.id === lancamentoId) ?? null,
+      ...(comando.tipo === 'estornar' && { motivo: comando.motivo }),
+    }),
   });
   return { operacaoId: comando.operacaoId, revisao: proximaRevisao, repetida: false };
 }

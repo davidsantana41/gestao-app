@@ -1,4 +1,4 @@
-import { criarTurno, dataBR, datasTrabalhoNoMes, type DadosPersistidos, type Lancamento } from './gestao.ts';
+import { criarTurno, dataBR, datasTrabalhoNoMes, resumir, type DadosPersistidos, type Lancamento } from './gestao.ts';
 import { arredondarRazaoEmCentavos, centavosParaReais, distribuirCentavos, reaisParaCentavos, somarCentavos } from './centavosFinanceiros.ts';
 
 export const uuidFinanceiro = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -85,9 +85,35 @@ export function lerComandoFinanceiro(valor: unknown) {
       return { ...base, tipo: retirada ? 'retirada' as const : 'entrada' as const,
         data: dataISO(c.data), descricao: texto(c.descricao, 'descrição', 300), valor: valor / 100, origem };
     }
+    case 'deposito-caixinha': {
+      const c = objeto(entrada, ['tipo', 'data', 'descricao', 'valorCentavos', 'caixinhaId']);
+      const chave = texto(c.caixinhaId, 'caixinha', 140);
+      const [familia, idOriginal, ...resto] = chave.split(':');
+      if (resto.length || !['diaria', 'fixo', 'reserva-fixa'].includes(familia)
+          || (familia === 'reserva-fixa' && !['reserva1', 'reserva2', 'reserva3'].includes(idOriginal))) invalido('caixinha');
+      const valor = inteiro(c.valorCentavos, 'valor');
+      if (!valor) invalido('valor');
+      return { ...base, tipo: 'deposito-caixinha' as const, caixinhaId: chave,
+        familia, idOriginal: id(idOriginal), data: dataISO(c.data),
+        descricao: texto(c.descricao, 'descrição', 300), valor: centavosParaReais(valor) };
+    }
     case 'excluir': {
       const c = objeto(entrada, ['tipo', 'lancamentoId']);
       return { ...base, tipo: 'excluir' as const, alvo: id(c.lancamentoId) };
+    }
+    case 'estornar': {
+      const c = objeto(entrada, ['tipo', 'lancamentoId', 'motivo']);
+      return { ...base, tipo: 'estornar' as const, alvo: id(c.lancamentoId), motivo: texto(c.motivo, 'motivo', 300) };
+    }
+    case 'preferencias': {
+      const c = objeto(entrada, ['tipo', 'modoEscuro', 'lembrete']);
+      if (c.modoEscuro !== undefined && typeof c.modoEscuro !== 'boolean') invalido('tema');
+      if (c.lembrete !== undefined && (typeof c.lembrete !== 'string' || c.lembrete.length > 500)) invalido('lembrete');
+      if (c.modoEscuro === undefined && c.lembrete === undefined) invalido('preferências');
+      return { ...base, tipo: 'preferencias' as const,
+        ...(typeof c.modoEscuro === 'boolean' && { modoEscuro: c.modoEscuro }),
+        ...(typeof c.lembrete === 'string' && { lembrete: c.lembrete }),
+      };
     }
     case 'custos-fixos': {
       const c = objeto(entrada, ['tipo', 'itens']);
@@ -119,7 +145,7 @@ function rateiosDoTurno(dados: DadosPersistidos, data: string, item: Lancamento)
   const posicao = dias.indexOf(dia);
   const temMovimento = [item.faturamentoBruto, item.combustivel, item.kmTotal, item.reservaFevereiro,
     item.reservaInvestimento, ...(item.reservasDiariasDia ?? []).map(r => r.valor)].some(valor => valor > 0);
-  const diaComRateio = dados.historico.some(h => h.tipo === 'turno' && h.data === item.data
+  const diaComRateio = dados.historico.some(h => !h.estornadoPor && h.tipo === 'turno' && h.data === item.data
     && (h.custosFixosDia > 0 || Object.values(h.detalheCustosFixosDia ?? {}).some(valor => valor !== 0)));
   const aplicar = temMovimento && posicao >= 0 && !diaComRateio;
   return Object.fromEntries(dados.custosFixos.map(c => {
@@ -131,10 +157,17 @@ function rateiosDoTurno(dados: DadosPersistidos, data: string, item: Lancamento)
 /** Calcula os totais do piloto em centavos e preserva lançamentos que não são o alvo. */
 export function montarFinanceiro(dados: DadosPersistidos, comando: ComandoFinanceiroValidado): DadosPersistidos {
   if (comando.tipo === 'custos-fixos') return { ...dados, custosFixos: comando.custosFixos };
+  if (comando.tipo === 'preferencias') return { ...dados,
+    modoEscuro: comando.modoEscuro ?? dados.modoEscuro, lembrete: comando.lembrete ?? dados.lembrete };
   const alvo = 'alvo' in comando && comando.alvo;
   const anteriores = dados.historico.filter(h => h.id === (alvo || comando.operacaoId));
   if (anteriores.length !== (alvo ? 1 : 0)) invalido('identidade do lançamento');
   const [anterior] = anteriores;
+  if (anterior?.estornadoPor) invalido('lançamento já estornado');
+  if (comando.tipo === 'estornar') {
+    return { ...dados, historico: dados.historico.map(h => h.id === comando.alvo
+      ? { ...h, estornadoPor: comando.operacaoId, motivoEstorno: comando.motivo } : h) };
+  }
   if (comando.tipo === 'excluir') return { ...dados, historico: dados.historico.filter(h => h.id !== comando.alvo) };
   if (comando.tipo === 'turno') {
     if (anterior && anterior.tipo !== 'turno') invalido('tipo histórico');
@@ -160,6 +193,28 @@ export function montarFinanceiro(dados: DadosPersistidos, comando: ComandoFinanc
     if (anterior) return { ...dados, historico: dados.historico.map(h => h.id === anterior.id ? item : h) };
     return { ...dados, historico: [item, ...dados.historico],
       reservasDiarias: (item.reservasDiariasDia ?? []).map(r => ({ ...r, valor: 0 })) };
+  }
+  if (comando.tipo === 'deposito-caixinha') {
+    const { valor, descricao, data, operacaoId, familia, idOriginal } = comando;
+    const saldoPrincipalCentavos = Math.round(resumir(dados.historico).liquido * 100);
+    if (!Number.isSafeInteger(saldoPrincipalCentavos)) throw new Error('Não foi possível validar o saldo principal.');
+    if (saldoPrincipalCentavos < reaisParaCentavos(valor)) {
+      throw new Error('Saldo principal insuficiente para depositar.');
+    }
+    const item: Lancamento = {
+      id: operacaoId, tipo: 'avulso_saida', depositoCaixinha: comando.caixinhaId,
+      data: dataBR(data), diaSemana: new Date(data + 'T12:00:00Z').toLocaleDateString('pt-BR', { weekday: 'long', timeZone: 'UTC' }),
+      descricao, faturamentoBruto: 0, combustivel: 0, litros: 0, kmTrabalhado: 0, kmTotal: 0,
+      reservaFevereiro: familia === 'reserva-fixa' && idOriginal === 'reserva1' ? valor : 0,
+      reservaInvestimento: familia === 'reserva-fixa' && idOriginal === 'reserva2' ? valor : 0,
+      reservaAcidente: familia === 'reserva-fixa' && idOriginal === 'reserva3' ? valor : 0,
+      custosFixosDia: 0, detalheCustosFixosDia: familia === 'fixo' ? { [idOriginal]: valor } : {},
+      reservasDiariasDia: familia === 'diaria'
+        ? [{ id: idOriginal, nome: dados.reservasDiarias?.find(r => r.id === idOriginal)?.nome ?? idOriginal, valor }] : [],
+      saidas: [{ id: operacaoId, origem: 'principal', nome: descricao, valor }],
+      totalDespesas: valor, liquido: -valor,
+    };
+    return { ...dados, historico: [item, ...dados.historico] };
   }
   const { tipo, operacaoId, data, valor, origem, descricao } = comando;
   const entrada = tipo === 'entrada';

@@ -135,10 +135,13 @@ export async function consultarFinanceiroReal(authorization: string | undefined,
     const gravavel = proprietario && marcador.estado === 'ativo' && controle.comandosFinanceiros === true;
     const caixinhas = await consultarCaixinhas({ listar: listarColecao(db, tx) }, espaco, financeiro, proprietario);
     const acoes = gravavel && Array.isArray(controle.operacoesFinanceiras)
-      ? controle.operacoesFinanceiras.filter(acaoDeCaixinha) : [];
+      ? controle.operacoesFinanceiras.filter(acao => acaoDeCaixinha(acao) || acao === 'deposito-caixinha' || acao === 'retirada') : [];
     const financeiroVisivel = proprietario ? financeiro : {
       _sync: financeiro._sync,
-      historico: financeiro.historico,
+      historico: financeiro.historico.map(item => {
+        const { motivoEstorno, ...visivel } = item;
+        return motivoEstorno === undefined ? item : visivel;
+      }),
       modoEscuro: financeiro.modoEscuro,
       lembrete: '',
       nomeReserva1: financeiro.nomeReserva1,

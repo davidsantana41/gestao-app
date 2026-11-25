@@ -123,6 +123,7 @@ export function criarTurno(form: TurnoFormulario, custos: CustoFixoItem[], id: s
 }
 
 export function resultado(item: Lancamento) {
+  if (item.estornadoPor) return { despesas: 0, liquido: 0 };
   // Retiradas de dinheiro já separado não descontam o saldo principal outra vez.
   const despesas = item.tipo === 'avulso_saida' ? (item.saidas ?? []).reduce((s, r) => s + (r.origem === 'principal' ? r.valor : 0), 0) : item.totalDespesas;
   return { despesas, liquido: item.tipo === 'avulso_saida' ? -despesas : item.liquido };
@@ -134,6 +135,7 @@ export function resumir(historico: Lancamento[]) {
   const caixinhas: Record<string, number> = {};
   const reservas: Record<string, { nome: string; valor: number }> = {};
   for (const h of historico) {
+    if (h.estornadoPor) continue;
     const r = resultado(h);
     faturamento += h.faturamentoBruto; despesas += r.despesas; liquido += r.liquido;
     combustivel += h.combustivel; km += h.kmTrabalhado || 0; litros += h.litros || 0;
@@ -162,6 +164,9 @@ export interface Lancamento {
   data: string; // Formato DD/MM/AAAA
   diaSemana: string;
   descricao?: string;
+  depositoCaixinha?: string;
+  estornadoPor?: string;
+  motivoEstorno?: string;
   tipo: 'turno' | 'avulso_saida' | 'avulso_entrada';
   faturamentoBruto: number;
   combustivel: number;

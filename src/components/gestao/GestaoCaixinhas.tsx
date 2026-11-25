@@ -1,7 +1,8 @@
 'use client';
 
 import { useId, useMemo, useState } from 'react';
-import { moeda, type DadosPersistidos } from '@/lib/gestao';
+import { dataLocal, moeda, numero, type DadosPersistidos } from '@/lib/gestao';
+import { reaisParaCentavos } from '@/lib/centavosFinanceiros';
 import {
   obterTodasCaixinhas,
   type EventoAuditoriaCaixinha,
@@ -28,12 +29,17 @@ const rotulosAuditoria: Record<EventoAuditoriaCaixinha['acao'], string> = {
   reativar: 'Reativação',
   excluir: 'Exclusão',
   conciliar: 'Vínculo confirmado',
+  depositar: 'Depósito',
+  retirar: 'Retirada',
+  estornar: 'Estorno',
+  corrigir: 'Correção',
 };
 
 type ModalEstado =
   | { tipo: 'criar' }
   | { tipo: 'visualizar'; caixinha: CaixinhaCompleta }
   | { tipo: 'editar'; caixinha: CaixinhaCompleta }
+  | { tipo: 'depositar' | 'retirar'; caixinha: CaixinhaCompleta }
   | { tipo: 'arquivar'; caixinha: CaixinhaCompleta }
   | { tipo: 'reativar'; caixinha: CaixinhaCompleta }
   | { tipo: 'excluir'; caixinha: CaixinhaCompleta }
@@ -332,6 +338,14 @@ export default function GestaoCaixinhas({
 
                     {!readOnly && c.editavel !== false && (
                       <>
+                        {c.estado === 'ativa' && podeAcao('deposito-caixinha') && (
+                          <button type="button" className="botao secundario compacto" disabled={bloquearEnvio || ocupado}
+                            onClick={() => setModal({ tipo: 'depositar', caixinha: c })}>Depositar</button>
+                        )}
+                        {c.estado === 'ativa' && podeAcao('retirada') && (
+                          <button type="button" className="botao secundario compacto" disabled={bloquearEnvio || ocupado}
+                            onClick={() => setModal({ tipo: 'retirar', caixinha: c })}>Retirar</button>
+                        )}
                         <button
                           type="button"
                           className="botao secundario compacto"
@@ -485,7 +499,7 @@ export default function GestaoCaixinhas({
                 </thead>
                 <tbody>
                   {auditoriaEspaco.map(e => (
-                    <tr key={e.id}>
+                    <tr key={`${e.id}:${e.caixinhaId}`}>
                       <td>
                         <time dateTime={e.confirmadoEm}>
                           {new Date(e.confirmadoEm).toLocaleString('pt-BR')}
@@ -507,6 +521,7 @@ export default function GestaoCaixinhas({
                           </span>
                         )}
                         {e.acao === 'criar' && <span>Nome: {e.nomeNovo}</span>}
+                        {e.lancamentoId && e.acao !== 'conciliar' && <span>Lançamento {e.lancamentoId}</span>}
                         {e.acao === 'conciliar' && e.vinculo && (
                           <span>
                             {e.vinculo.descricao} ({moeda(e.vinculo.valor)})
@@ -541,6 +556,39 @@ export default function GestaoCaixinhas({
 
       {modal?.tipo === 'visualizar' && (
         <ModalVisualizarCaixinha caixinha={modal.caixinha} onFechar={() => setModal(null)} />
+      )}
+
+      {(modal?.tipo === 'depositar' || modal?.tipo === 'retirar') && (
+        <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="movimentar-caixinha">
+          <form className="painel modal-conteudo pilha" onSubmit={evento => {
+            evento.preventDefault();
+            const campos = new FormData(evento.currentTarget);
+            const valor = numero(String(campos.get('valor') ?? ''));
+            try {
+              const valorCentavos = reaisParaCentavos(valor);
+              if (valorCentavos < 1) throw new Error('Informe um valor maior que zero.');
+              const { caixinha } = modal;
+              void aplicarAlteracao({
+                data: dataLocal(), descricao: String(campos.get('descricao') ?? ''), valorCentavos,
+                ...(modal.tipo === 'depositar'
+                  ? { tipo: 'deposito-caixinha', caixinhaId: caixinha.id }
+                  : { tipo: 'retirada', origem: caixinha.familia === 'diaria' ? caixinha.id : caixinha.idOriginal }),
+              });
+            } catch (erro) {
+              setFeedback({ tipo: 'erro', texto: (erro as Error).message });
+            }
+          }}>
+            <h3 id="movimentar-caixinha">{modal.tipo === 'depositar' ? 'Depositar' : 'Retirar'} · {modal.caixinha.nome}</h3>
+            <p className="ajuda">{modal.tipo === 'depositar' ? 'O valor sairá do Saldo principal e entrará nesta caixinha.' : 'O valor será debitado desta caixinha.'}</p>
+            <label className="campo"><span>Valor (R$)</span><input name="valor" inputMode="decimal" required /></label>
+            <label className="campo"><span>Descrição</span><input name="descricao" maxLength={300} required /></label>
+            {feedback?.tipo === 'erro' && <p role="alert" className="mensagem erro">{feedback.texto}</p>}
+            <div className="acoes">
+              <button type="button" className="botao secundario" onClick={() => setModal(null)}>Cancelar</button>
+              <button type="submit" className="botao primario" disabled={bloquearEnvio || ocupado}>Confirmar</button>
+            </div>
+          </form>
+        </div>
       )}
 
       {modal?.tipo === 'editar' && (

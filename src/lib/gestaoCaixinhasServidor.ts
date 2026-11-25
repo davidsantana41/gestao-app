@@ -26,7 +26,12 @@ const rotulosAuditoria = {
   'caixinha-reativar': 'reativar',
   'caixinha-excluir': 'excluir',
   'caixinha-conciliar': 'conciliar',
+  'deposito-caixinha': 'depositar',
+  retirada: 'retirar',
+  estornar: 'estornar',
+  turno: 'corrigir',
 } as const;
+const tiposAuditados = Object.keys(rotulosAuditoria);
 
 export function acaoDeCaixinha(valor: unknown): valor is Acao {
   return acoesCaixinha.some(acao => acao === valor);
@@ -116,25 +121,28 @@ export async function consultarCaixinhas(tx: Pick<TransacaoCatalogo, 'listar'>, 
     tx.listar(espaco + '/caixinhas'),
     vinculosDoEspaco(tx, espaco, dados),
     referenciarPendencias(dados),
-    proprietario ? tx.listar(espaco + '/operacoes', { campo: 'tipo', operador: 'in', valor: acoesCaixinha }) : [],
+    proprietario ? tx.listar(espaco + '/operacoes', { campo: 'tipo', operador: 'in', valor: tiposAuditados }) : [],
   ]);
   const projecao = projetarCatalogoCaixinhas(dados);
   const persistidas = new Map(registros.filter(item => idCaixinhaValido(item.id)).map(item => [item.id as IdCaixinha, item as Caixa]));
   const auditoria = eventos.sort((a, b) => Number(b.revisao) - Number(a.revisao)).flatMap((evento): EventoAuditoriaCaixinha[] => {
-    const id = Array.isArray(evento.caixinhas) ? evento.caixinhas[0] : undefined;
-    if (!acaoDeCaixinha(evento.tipo) || !idCaixinhaValido(id) || typeof evento.id !== 'string'
-        || typeof evento.autorUid !== 'string') return [];
+    const ids = Array.isArray(evento.caixinhas) ? evento.caixinhas.filter(idCaixinhaValido) : [];
+    if (typeof evento.tipo !== 'string' || !Object.hasOwn(rotulosAuditoria, evento.tipo) || typeof evento.id !== 'string'
+        || typeof evento.autorUid !== 'string' || (evento.tipo === 'turno' && !evento.antes)) return [];
+    const acao = rotulosAuditoria[evento.tipo as keyof typeof rotulosAuditoria];
+    const { id, autorUid } = evento;
     const antes = evento.antes as Caixa | null;
     const depois = evento.depois as Caixa | undefined;
     const vinculo = evento.vinculo as Vinculo | undefined;
-    return [{
-      id: evento.id, acao: rotulosAuditoria[evento.tipo], caixinhaId: id, autorUid: evento.autorUid,
+    return ids.map(caixinhaId => ({
+      id, acao, caixinhaId, autorUid,
+      lancamentoId: typeof evento.lancamentoId === 'string' ? evento.lancamentoId : undefined,
       confirmadoEm: (evento.confirmadoEm as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? '',
       motivo: typeof evento.motivo === 'string' ? evento.motivo : undefined,
       nomeAnterior: antes?.nome, nomeNovo: depois?.nome, finalidade: depois?.finalidade,
       vinculo: vinculo && { referenciaSha256: vinculo.id, lancamentoId: vinculo.referencia.lancamentoId,
         fonte: vinculo.evidencia.fonte, valor: vinculo.evidencia.valor },
-    }];
+    }));
   });
   // Incorpora também identidades cujo cadastro financeiro foi arquivado ou removido.
   const reservas = [...(dados.reservasDiarias ?? [])];
@@ -165,7 +173,8 @@ export async function consultarCaixinhas(tx: Pick<TransacaoCatalogo, 'listar'>, 
     const motivo = !editavel ? 'A identidade precisa ser cadastrada pelo operador do espaço.'
       : motivoSaldo ?? (caixa.saldoCentavos !== 0 ? 'Zere o saldo por uma movimentação válida.'
         : configurada ? 'Desative a configuração de rateio ou reserva associada.' : undefined);
-    const motivoExclusao = motivo ?? (caixa.movimentos.length ? 'Use Desativar para preservar as movimentações.' : undefined);
+    const motivoExclusao = motivo ?? (caixa.movimentos.length || auditoria.some(evento => evento.caixinhaId === caixa.id && evento.lancamentoId)
+      ? 'Use Desativar para preservar as movimentações.' : undefined);
     return [{ ...caixa, estado, editavel, nome: cadastro?.nome ?? caixa.nome, finalidade: cadastro?.finalidade ?? '',
       auditoria: auditoria.filter(evento => evento.caixinhaId === caixa.id), saldoAtestado, motivoSaldoNaoAtestado: motivoSaldo,
       podeArquivar: !motivo, motivoBloqueioArquivamento: motivo, podeExcluir: !motivoExclusao, motivoBloqueioExclusao: motivoExclusao }];
@@ -243,7 +252,11 @@ export async function confirmarCaixinha(tx: TransacaoCatalogo, uid: string, espa
       catch { throw new ErroServico(422, 'O saldo está em revisão.'); }
       if (saldoAtual !== 0) throw new ErroServico(422, 'Zere o saldo com uma movimentação válida antes de arquivar ou excluir.');
       if (!idDiaria && projetada?.configurada) throw new ErroServico(422, 'A caixinha ainda recebe rateios ou reservas automáticas. Desative a configuração associada antes de prosseguir.');
-      const historico = Boolean(projetada?.evidencias.some(e => e.fonte !== 'configuracao') || vinculos.some(v => v.caixinhaId === id));
+      const historicoCompleto = op.tipo === 'caixinha-excluir' ? projetarCatalogoCaixinhas({
+        ...dados, historico: dados.historico.map(h => h.estornadoPor ? { ...h, estornadoPor: undefined } : h),
+      }).caixinhas.find(c => c.id === id) : projetada;
+      const historico = Boolean(historicoCompleto?.evidencias.some(e => e.fonte !== 'configuracao' && (e.fonte !== 'reserva-fixa' || e.valor !== 0))
+        || vinculos.some(v => v.caixinhaId === id));
       if (op.tipo === 'caixinha-excluir' && historico) throw new ErroServico(422, 'A caixinha tem histórico. Use Desativar para preservar os vínculos.');
       if (op.tipo === 'caixinha-arquivar' && depois.estado === 'arquivada') throw new ErroServico(422, 'A caixinha já está arquivada.');
       depois = { ...depois, estado: op.tipo === 'caixinha-excluir' ? 'excluida' : 'arquivada' };

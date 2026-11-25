@@ -57,11 +57,12 @@ export function projetarCatalogoCaixinhas(dados: DadosPersistidos): Readonly<{
   const pendencias: Pendencia[] = [];
   const custos = dados.custosFixos;
   const diarias = dados.reservasDiarias ?? [];
+  const historicoAtivo = dados.historico.filter(item => !item.estornadoPor);
   const duplicados = new Set<IdCaixinha>();
   const paisDuplicados = idsDuplicados(dados.historico);
 
   for (const id of idsDuplicados(custos)) duplicados.add(chave('fixo', id));
-  for (const lista of [diarias, ...dados.historico.map(h => h.reservasDiariasDia ?? [])]) {
+  for (const lista of [diarias, ...historicoAtivo.map(h => h.reservasDiariasDia ?? [])]) {
     for (const id of idsDuplicados(lista)) duplicados.add(chave('diaria', id));
   }
 
@@ -111,7 +112,7 @@ export function projetarCatalogoCaixinhas(dados: DadosPersistidos): Readonly<{
 
   // Uma retirada só pode ser vinculada depois de levantar as referências
   // independentes da configuração e de todos os lançamentos.
-  for (const h of dados.historico) {
+  for (const h of historicoAtivo) {
     const origem = { lancamentoId: h.id, data: h.data };
     for (const [id, valor] of Object.entries(h.detalheCustosFixosDia ?? {})) {
       registrar('fixo', id, { ...origem, fonte: 'rateio', valor });
@@ -126,7 +127,7 @@ export function projetarCatalogoCaixinhas(dados: DadosPersistidos): Readonly<{
     }
   }
 
-  for (const h of dados.historico) {
+  for (const h of historicoAtivo) {
     const saidasDuplicadas = idsDuplicados(h.saidas ?? []);
     h.saidas?.forEach((s, indice) => {
       if (s.origem === 'principal') return;

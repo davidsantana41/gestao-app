@@ -39,6 +39,7 @@ function opcoes(historico: readonly Lancamento[], lancamentoId: string, fonte: S
   const pais = historico.filter(h => h.id === lancamentoId);
   if (pais.length !== 1) return [];
   const [pai] = pais;
+  if (pai.estornadoPor) return [];
   return registros(pai, fonte).map(({ chave, valores }) => {
     const chaveOriginal = chave?.trim() ? chave : null;
     return { chave: chaveOriginal, assinatura: JSON.stringify([1, pai.id, pai.data, pai.tipo, fonte, chaveOriginal, valores]) };

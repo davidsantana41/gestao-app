@@ -4,11 +4,12 @@ import { moeda, type DadosPersistidos, type ReservaDiariaItem, type CustoFixoIte
 
 export type EventoAuditoriaCaixinha = {
   id: string;
-  acao: 'criar' | 'renomear' | 'arquivar' | 'reativar' | 'excluir' | 'conciliar';
+  acao: 'criar' | 'renomear' | 'arquivar' | 'reativar' | 'excluir' | 'conciliar' | 'depositar' | 'retirar' | 'estornar' | 'corrigir';
   caixinhaId: IdCaixinha;
   autorUid: string;
   confirmadoEm: string;
   motivo?: string;
+  lancamentoId?: string;
   nomeAnterior?: string;
   nomeNovo?: string;
   finalidade?: string;

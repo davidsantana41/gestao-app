@@ -25,14 +25,14 @@ import { reaisParaCentavos } from '@/lib/centavosFinanceiros';
 import { useCompartilhamento, type EstadoCompartilhamento } from '@/lib/useCompartilhamento';
 import ContaCompartilhamento from '@/components/ContaCompartilhamento';
 import type { EspacoSelecionado } from '@/components/Compartilhamento';
-import { dataLocal, moeda, numero, resumir, type Lancamento } from '@/lib/gestao';
+import { dataLocal, moeda, numero, resumir, type DadosPersistidos, type Lancamento } from '@/lib/gestao';
 
-function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; onSalvar: (texto: string, base: string) => boolean; readOnly?: boolean }) {
+function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; onSalvar: (texto: string, base: string) => boolean | Promise<boolean>; readOnly?: boolean }) {
   const [base, setBase] = useState(inicial);
   const [texto, setTexto] = useState(inicial);
   const dirty = texto !== base;
   const visivel = dirty ? texto : inicial;
-  return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} readOnly={readOnly} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label>{!readOnly && <button className="botao secundario" type="button" onClick={() => { if (onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button>}</section>;
+  return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} readOnly={readOnly} maxLength={500} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label>{!readOnly && <button className="botao secundario" type="button" onClick={async () => { if (await onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button>}</section>;
 }
 
 function CabecalhoApp({ email, cadastroUid, readOnly, modoEscuro, saindo, convitePendente, contaAberta, onAbrirConta, onAlternarTema, onSair, onTrocarModulo }: {
@@ -125,6 +125,7 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
   const dados = financeiro ? financeiro.dados : storage?.dados;
   const [aba, setAba] = useState('turno');
   const [editando, setEditando] = useState<Lancamento>();
+  const [estorno, setEstorno] = useState<{ item: Lancamento; base: DadosPersistidos }>();
   const [formVersao, setFormVersao] = useState(0);
   const [recuperacaoVersao, setRecuperacaoVersao] = useState(0);
   const [mes, setMes] = useState('');
@@ -158,6 +159,21 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
     if (!financeiro) setMensagem('Lançamento excluído. Relatórios atualizados.');
   };
   const pedirExclusao = (item: Lancamento) => setConfirmacao({ titulo: 'Excluir lançamento?', descricao: `Registro de ${item.data}: ${item.descricao || 'Turno de trabalho'}. Ele será removido do histórico e os relatórios serão recalculados.`, confirmar: 'Excluir lançamento', executar: () => excluir(item) });
+  const abrirEstorno = financeiro && !readOnly && !bloquearEnvio
+    ? (item: Lancamento) => setEstorno({ item, base: dados }) : undefined;
+  const alternarTema = storage ? () => { storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro })); }
+    : financeiro?.producao && !bloquearEnvio
+      ? () => { void registrar(dados, () => ({ tipo: 'preferencias', modoEscuro: !dados.modoEscuro })); } : undefined;
+  const salvarLembrete = (lembrete: string, base: string) => {
+    if (financeiro?.producao) {
+      if (dados.lembrete === base) return registrar(dados, () => ({ tipo: 'preferencias', lembrete }));
+      setMensagem('O lembrete mudou em outro dispositivo. Confira a versão atual antes de salvar.');
+      return false;
+    }
+    const salvo = storage?.atualizar(d => ({ ...d, lembrete }), { ...dados, lembrete: base });
+    if (salvo) setMensagem('Lembrete salvo localmente. Confira o estado da sincronização.');
+    return Boolean(salvo);
+  };
   const escolher = (origem: 'local' | 'nuvem') => {
     if (!storage) return;
     const versaoNuvem = storage.versaoNuvem;
@@ -172,7 +188,24 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
     : null;
   return <main className={`app ${dados.modoEscuro ? 'escuro' : 'claro'}`}>
     {confirmacao && <Confirmacao titulo={confirmacao.titulo} descricao={confirmacao.descricao} confirmar={confirmacao.confirmar} onCancelar={() => setConfirmacao(undefined)} onConfirmar={() => { confirmacao.executar(); setConfirmacao(undefined); }} />}
-    <CabecalhoApp email={email} cadastroUid={!readOnly && viewerUid === uid ? uid : undefined} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={storage && (() => { storage.atualizar(d => ({ ...d, modoEscuro: !d.modoEscuro })); })} onTrocarModulo={onTrocarModulo} onSair={storage || financeiro?.producao ? async () => {
+    {estorno && <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="titulo-estorno">
+      <form className="painel modal-conteudo pilha" onSubmit={evento => {
+        evento.preventDefault();
+        const motivo = String(new FormData(evento.currentTarget).get('motivo') ?? '').trim();
+        if (!motivo) return;
+        void registrar(estorno.base, () => ({ tipo: 'estornar', lancamentoId: estorno.item.id, motivo }))
+          .then(enviado => { if (enviado) setEstorno(undefined); });
+      }}>
+        <h2 id="titulo-estorno">Estornar lançamento</h2>
+        <p>O lançamento de {estorno.item.data} será preservado no histórico. O estorno retira seu efeito dos saldos e relatórios.</p>
+        <label className="campo"><span>Motivo do estorno</span><textarea name="motivo" required maxLength={300} /></label>
+        <div className="acoes">
+          <button type="button" className="botao secundario" onClick={() => setEstorno(undefined)}>Cancelar</button>
+          <button type="submit" className="botao perigo" disabled={bloquearEnvio}>Confirmar estorno</button>
+        </div>
+      </form>
+    </div>}
+    <CabecalhoApp email={email} cadastroUid={!readOnly && viewerUid === uid ? uid : undefined} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={alternarTema} onTrocarModulo={onTrocarModulo} onSair={storage || financeiro?.producao ? async () => {
       setSaindo(true); try { await storage?.aguardar(); await signOut(auth); } catch { setMensagem('Não foi possível sair. Tente novamente em instantes.'); } finally { setSaindo(false); }
     } : undefined} />
     {contaView ? <div className="container conteudo">{contaView}</div> : <div className="container conteudo">
@@ -217,8 +250,8 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
             valorCentavos: paraCentavos(form.valor), ...(form.tipo !== 'entrada' && { origem: form.origem }),
           })))}
           onSalvar={(item, base) => { const salvo = storage?.atualizar(d => ({ ...d, historico: [item, ...d.historico] }), base); if (salvo) setMensagem('Movimentação registrada.'); return Boolean(salvo); }} />}
-        <Lembrete key={`lembrete-${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} inicial={dados.lembrete} readOnly={readOnly || Boolean(financeiro)} onSalvar={(lembrete, base) => { const salvo = storage?.atualizar(d => ({ ...d, lembrete }), { ...dados, lembrete: base }); if (salvo) setMensagem('Lembrete salvo localmente. Confira o estado da sincronização.'); return Boolean(salvo); }} />
-        <Historico itens={dados.historico.slice(0, 10)} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || bloquearEnvio ? undefined : pedirExclusao} />
+        <Lembrete key={`lembrete-${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} inicial={dados.lembrete} readOnly={readOnly || Boolean(financeiro && (!financeiro.producao || bloquearEnvio))} onSalvar={salvarLembrete} />
+        <Historico itens={dados.historico.slice(0, 10)} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || financeiro ? undefined : pedirExclusao} onEstornar={abrirEstorno} />
       </div>
       {aba === 'caixinhas' && (
         <GestaoCaixinhas
@@ -229,7 +262,7 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
           onComando={financeiro?.caixinhas ? (alteracao, base) => registrar(base, () => alteracao) : undefined}
         />
       )}
-      {aba === 'relatorios' && <Relatorios dados={dados} caixinhas={financeiro?.caixinhas?.relatorio} onVerCaixinhas={() => setAba('caixinhas')} mes={mes} onMes={setMes} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || bloquearEnvio ? undefined : pedirExclusao} />}
+      {aba === 'relatorios' && <Relatorios dados={dados} caixinhas={financeiro?.caixinhas?.relatorio} onVerCaixinhas={() => setAba('caixinhas')} mes={mes} onMes={setMes} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || financeiro ? undefined : pedirExclusao} onEstornar={abrirEstorno} />}
       {aba === 'configuracoes' && <CustosFixos key={`${recuperacaoVersao}-${financeiro ? 'servico' : dados._sync?.generation ?? 0}`}
         itens={dados.custosFixos} versao={dados._sync} readOnly={readOnly || Boolean(financeiro && !financeiro.producao)}
         bloquearEnvio={bloquearEnvio} onComando={financeiro?.producao ? (itens, base) => registrar({ ...dados, _sync: base }, () => ({
@@ -237,7 +270,7 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
           itens: itens.map(({ id, nome, valorMensal, cor }) => ({ id, nome, valorMensalCentavos: reaisParaCentavos(valorMensal), ...(cor && { cor }) })),
         })) : undefined}
         onSalvar={(custosFixos, base) => { const salvo = storage?.atualizar(d => ({ ...d, custosFixos }), { ...dados, custosFixos: base }); if (salvo) setMensagem('Custos salvos localmente. Os turnos antigos mantêm o rateio original.'); return Boolean(salvo); }} />}
-      {aba === 'privacidade' && <div className="pilha"><Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage?.dadosNuvem ?? null} readOnly={readOnly || Boolean(financeiro)} />{!readOnly && storage && <ReiniciarDados uid={uid} email={email} plan={storage.reinicio} prepare={storage.prepararReinicio} backup={storage.backupReinicio} exported={storage.marcarBackupExportado} execute={storage.executarReinicio} check={storage.verificarReinicio} onComplete={() => { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); }} />}</div>}
+      {aba === 'privacidade' && <div className="pilha"><Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage?.dadosNuvem ?? (financeiro?.producao ? dados : null)} readOnly={readOnly || Boolean(financeiro && !financeiro.producao)} />{!readOnly && storage && <ReiniciarDados uid={uid} email={email} plan={storage.reinicio} prepare={storage.prepararReinicio} backup={storage.backupReinicio} exported={storage.marcarBackupExportado} execute={storage.executarReinicio} check={storage.verificarReinicio} onComplete={() => { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); }} />}</div>}
       <footer>APPCAR · Gestão do seu trabalho · Versão reconstruída</footer>
     </div>}
   </main>;
