@@ -38,12 +38,18 @@ export default function FilaNoPainel({ financeiro }: { financeiro: ReturnType<ty
     {financeiro.producao && atual && !financeiro.gravavel && <p role="status" className="mensagem aviso">Gravação suspensa neste espaço.</p>}
     {financeiro.producao && atual && financeiro.modoGravacao === 'direto' && <p role="status" className="mensagem sucesso">Conectado: as operações serão confirmadas diretamente no servidor. A senha local só é necessária para preparar operações offline.</p>}
     {financeiro.producao && atual && financeiro.modoGravacao === 'bloqueado' && financeiro.gravavel && financeiro.motivoBloqueio && <p role="status" className="mensagem aviso">{financeiro.motivoBloqueio}</p>}
-    {geracao !== undefined && (financeiro.aberta !== geracao || geracoes.length > 1) && <form className="pilha compacta" onSubmit={evento => {
-      evento.preventDefault();
-      const segredo = new FormData(evento.currentTarget).get('segredo');
-      evento.currentTarget.reset();
-      if (typeof segredo === 'string') financeiro.desbloquear(segredo, geracao);
-    }}>
+    {geracao !== undefined && (financeiro.aberta !== geracao || geracoes.length > 1) && <details
+      open={!(financeiro.producao && financeiro.modoGravacao === 'direto')}
+      className="pilha compacta"
+    >
+      <summary>{financeiro.producao && financeiro.modoGravacao === 'direto'
+        ? 'Preparar fila offline neste dispositivo (opcional)' : 'Desbloquear fila financeira local'}</summary>
+      <form className="pilha compacta" onSubmit={evento => {
+        evento.preventDefault();
+        const segredo = new FormData(evento.currentTarget).get('segredo');
+        evento.currentTarget.reset();
+        if (typeof segredo === 'string') financeiro.desbloquear(segredo, geracao);
+      }}>
       {geracoes.length > 1 && <label className="campo"><span>Geração da fila</span><select value={geracao} onChange={e => setSelecionada(Number(e.currentTarget.value))}>
         {geracoes.map(valor => <option key={valor} value={valor}>{valor}</option>)}
       </select></label>}
@@ -52,7 +58,8 @@ export default function FilaNoPainel({ financeiro }: { financeiro: ReturnType<ty
         <p className="ajuda">{financeiro.producao ? 'Escolha uma senha exclusiva da fila, com pelo menos 16 caracteres.' : 'Use uma senha fictícia de pelo menos 16 caracteres.'} Guarde-a para reabrir esta fila no mesmo navegador.</p>
         <div><button className="botao primario" disabled={financeiro.ocupado}>Desbloquear fila</button></div>
       </>}
-    </form>}
+      </form>
+    </details>}
     {financeiro.aberta !== undefined && <>
       {financeiro.aberta !== atual?.generation && <p className="mensagem aviso">Fila da geração {financeiro.aberta}. Desbloqueie a geração atual para registrar novas operações.</p>}
       {financeiro.itens.length === 0 && <p className="ajuda">A fila está vazia.</p>}
