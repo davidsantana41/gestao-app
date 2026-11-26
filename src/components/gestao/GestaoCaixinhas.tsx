@@ -24,6 +24,14 @@ export type GestaoCaixinhasProps = {
 
 type AbaCaixinhas = 'ativas' | 'arquivadas' | 'conciliacao' | 'auditoria';
 
+const rotulosMovimento: Record<CaixinhaCompleta['movimentos'][number]['tipo'], string> = {
+  'provisao-diaria': 'Provisão diária',
+  'rateio-fixo': 'Rateio de custo fixo',
+  'reserva-fixa': 'Reserva fixa',
+  retirada: 'Retirada',
+  conciliacao: 'Vínculo confirmado',
+};
+
 const rotulosAuditoria: Record<EventoAuditoriaCaixinha['acao'], string> = {
   criar: 'Criação',
   renomear: 'Edição',
@@ -61,6 +69,7 @@ export default function GestaoCaixinhas({
   const modal = dialogo?.modal;
   const setModal = (valor: ModalEstado | null) => setDialogo(valor ? { modal: valor, base: dados } : null);
   const [filtroTexto, setFiltroTexto] = useState('');
+  const [menuAberto, setMenuAberto] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ tipo: 'sucesso' | 'erro'; texto: string } | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
@@ -69,6 +78,7 @@ export default function GestaoCaixinhas({
   // Projeção completa das caixinhas e pendências
   const relatorio = useMemo(() => leitura?.relatorio ?? obterTodasCaixinhas(dados), [dados, leitura]);
   const auditoriaEspaco = leitura?.auditoria ?? [];
+  const nomesPorId = new Map(relatorio.caixinhas.map(caixinha => [caixinha.id, caixinha.nome]));
   const podeAcao = (acao: string) => !readOnly && leitura?.acoes.includes(acao) === true;
   const saldoConfirmado = relatorio.caixinhas.every(c => c.saldoAtestado);
 
@@ -109,6 +119,9 @@ export default function GestaoCaixinhas({
         }
         const resultado = await onComando(comandoPayload, dialogo.base);
         if (resultado) {
+          if (comandoPayload.tipo === 'caixinha-arquivar') setAba('arquivadas');
+          if (comandoPayload.tipo === 'caixinha-reativar') setAba('ativas');
+          setMenuAberto(null);
           setFeedback({ tipo: 'sucesso', texto: resultado === 'confirmada'
             ? 'Operação confirmada pelo serviço financeiro.'
             : 'Operação adicionada à fila. Acompanhe a confirmação no painel.' });
@@ -297,9 +310,6 @@ export default function GestaoCaixinhas({
                         </span>
                       </div>
                       <h3 className="card-caixinha-nome">{c.nome}</h3>
-                      <p className="card-caixinha-id" title="Identificador permanente">
-                        <code>{c.id}</code>
-                      </p>
                     </div>
 
                     <div className="card-caixinha-saldo-bloco">
@@ -319,91 +329,62 @@ export default function GestaoCaixinhas({
                   </header>
 
                   <div className="card-caixinha-corpo">
-                    <p className="card-caixinha-finalidade">
-                      <strong>Finalidade: </strong>
-                      {c.finalidade || <span className="texto-suave">Não informada</span>}
-                    </p>
+                    {c.finalidade.trim() && <p className="card-caixinha-finalidade"><strong>Finalidade: </strong>{c.finalidade}</p>}
 
-                    <div className="card-caixinha-mini-indicadores">
-                      <div>
-                        <span>Entradas: </span>
-                        <strong>{moeda(c.totalCreditos)}</strong>
-                      </div>
-                      <div>
-                        <span>Retiradas: </span>
-                        <strong>{moeda(c.totalDebitos)}</strong>
-                      </div>
-                      <div>
-                        <span>Movimentações: </span>
-                        <strong>{c.movimentos.length}</strong>
-                      </div>
-                    </div>
+                    <dl className="card-caixinha-mini-indicadores">
+                      <div><dt>Entradas</dt><dd>{moeda(c.totalCreditos)}</dd></div>
+                      <div><dt>Retiradas</dt><dd>{moeda(c.totalDebitos)}</dd></div>
+                      <div><dt>Movimentações</dt><dd>{c.movimentos.length}</dd></div>
+                    </dl>
                   </div>
 
                   <footer className="card-caixinha-acoes">
+                    {!readOnly && c.estado === 'ativa' && podeAcao('deposito-caixinha') && (
+                      <button type="button" className="botao primario compacto" disabled={bloquearEnvio || ocupado}
+                        title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
+                        onClick={() => setModal({ tipo: 'depositar', caixinha: c })}>Depositar</button>
+                    )}
+                    {!readOnly && c.estado === 'ativa' && podeAcao('retirada') && (
+                      <button type="button" className="botao primario compacto" disabled={bloquearEnvio || ocupado}
+                        title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
+                        onClick={() => setModal({ tipo: 'retirar', caixinha: c })}>Retirar</button>
+                    )}
                     <button
                       type="button"
                       className="botao secundario compacto"
                       onClick={() => setModal({ tipo: 'visualizar', caixinha: c })}
                     >
-                      Visualizar
+                      Ver detalhes
                     </button>
 
                     {!readOnly && c.editavel !== false && (
-                      <>
-                        {c.estado === 'ativa' && podeAcao('deposito-caixinha') && (
-                          <button type="button" className="botao secundario compacto" disabled={bloquearEnvio || ocupado}
-                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
-                            onClick={() => setModal({ tipo: 'depositar', caixinha: c })}>Depositar</button>
+                      <div className="menu-caixinha">
+                        <button type="button" className="botao secundario compacto botao-menu-caixinha"
+                          aria-label={`Mais ações de ${c.nome}`} aria-haspopup="menu"
+                          aria-expanded={menuAberto === c.id} disabled={ocupado}
+                          onClick={() => setMenuAberto(menuAberto === c.id ? null : c.id)}>⋯</button>
+                        {menuAberto === c.id && (
+                          <div className="opcoes-menu-caixinha" role="menu" aria-label={`Ações de ${c.nome}`}>
+                            <button role="menuitem" type="button" disabled={bloquearEnvio || !podeAcao('caixinha-editar')}
+                              title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
+                              onClick={() => { setMenuAberto(null); setModal({ tipo: 'editar', caixinha: c }); }}>Editar</button>
+                            {c.estado === 'ativa' ? (
+                              <button role="menuitem" type="button" disabled={bloquearEnvio || !podeAcao('caixinha-arquivar')}
+                                title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
+                                onClick={() => { setMenuAberto(null); setModal({ tipo: 'arquivar', caixinha: c }); }}>Desativar</button>
+                            ) : (
+                              <button role="menuitem" type="button" disabled={bloquearEnvio || !podeAcao('caixinha-reativar')}
+                                title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
+                                onClick={() => { setMenuAberto(null); setModal({ tipo: 'reativar', caixinha: c }); }}>Reativar</button>
+                            )}
+                            <button role="menuitem" type="button" className="acao-menu-perigo"
+                              disabled={bloquearEnvio || !podeAcao('caixinha-excluir')}
+                              title={bloquearEnvio ? motivoBloqueioEnvio : c.podeExcluir
+                                ? 'Excluir caixinha sem movimentos' : 'Exclusão física bloqueada por ter histórico'}
+                              onClick={() => { setMenuAberto(null); setModal({ tipo: 'excluir', caixinha: c }); }}>Excluir</button>
+                          </div>
                         )}
-                        {c.estado === 'ativa' && podeAcao('retirada') && (
-                          <button type="button" className="botao secundario compacto" disabled={bloquearEnvio || ocupado}
-                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
-                            onClick={() => setModal({ tipo: 'retirar', caixinha: c })}>Retirar</button>
-                        )}
-                        <button
-                          type="button"
-                          className="botao secundario compacto"
-                          disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-editar')}
-                          title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
-                          onClick={() => setModal({ tipo: 'editar', caixinha: c })}
-                        >
-                          Editar
-                        </button>
-
-                        {c.estado === 'ativa' ? (
-                          <button
-                            type="button"
-                            className="botao secundario compacto"
-                            disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-arquivar')}
-                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
-                            onClick={() => setModal({ tipo: 'arquivar', caixinha: c })}
-                          >
-                            Desativar
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="botao secundario compacto"
-                            disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-reativar')}
-                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
-                            onClick={() => setModal({ tipo: 'reativar', caixinha: c })}
-                          >
-                            Reativar
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          className="botao perigo compacto"
-                          disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-excluir')}
-                          title={bloquearEnvio ? motivoBloqueioEnvio : c.podeExcluir
-                            ? 'Excluir caixinha sem movimentos' : 'Exclusão física bloqueada por ter histórico'}
-                          onClick={() => setModal({ tipo: 'excluir', caixinha: c })}
-                        >
-                          Excluir
-                        </button>
-                      </>
+                      </div>
                     )}
                   </footer>
                 </article>
@@ -506,7 +487,7 @@ export default function GestaoCaixinhas({
                   <tr>
                     <th>Data / Hora</th>
                     <th>Ação</th>
-                    <th>Caixinha ID</th>
+                    <th>Caixinha</th>
                     <th>Motivo informado</th>
                     <th>Detalhes</th>
                     <th>Autor UID</th>
@@ -526,7 +507,7 @@ export default function GestaoCaixinhas({
                         </span>
                       </td>
                       <td>
-                        <code>{e.caixinhaId}</code>
+                        {nomesPorId.get(e.caixinhaId) || e.nomeNovo || e.nomeAnterior || 'Caixinha removida'}
                       </td>
                       <td>{e.motivo || '—'}</td>
                       <td>
@@ -754,9 +735,6 @@ function ModalVisualizarCaixinha({
         <div className="titulo-linha">
           <div>
             <h3 id="modal-detalhes-titulo">{caixinha.nome}</h3>
-            <p className="ajuda">
-              ID permanente: <code>{caixinha.id}</code>
-            </p>
           </div>
           <button type="button" className="botao secundario compacto" onClick={onFechar}>
             Fechar
@@ -786,16 +764,18 @@ function ModalVisualizarCaixinha({
         </div>
 
         <div style={{ margin: '14px 0' }}>
-          <p>
-            <strong>Finalidade: </strong>
-            {caixinha.finalidade || 'Não informada'}
-          </p>
+          {caixinha.finalidade.trim() && <p><strong>Finalidade: </strong>{caixinha.finalidade}</p>}
           {!caixinha.saldoAtestado && (
             <p className="mensagem aviso">
               ⚠️ {caixinha.motivoSaldoNaoAtestado || 'Saldo em revisão.'}
             </p>
           )}
         </div>
+
+        <details className="informacoes-tecnicas-caixinha">
+          <summary>Informações técnicas</summary>
+          <p><span>Identificador permanente</span><code>{caixinha.id}</code></p>
+        </details>
 
         {/* Abas Internas */}
         <div className="abas-caixinhas">
@@ -834,7 +814,7 @@ function ModalVisualizarCaixinha({
                     <tr key={m.id}>
                       <td>{m.data}</td>
                       <td>
-                        <span className="selo">{m.tipo === 'conciliacao' ? 'Vínculo confirmado' : m.tipo}</span>
+                        <span className="selo">{rotulosMovimento[m.tipo]}</span>
                       </td>
                       <td>{m.descricao}</td>
                       <td
