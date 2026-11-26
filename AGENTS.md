@@ -72,3 +72,18 @@ Se uma operação apresentar risco de perda de dados, interromper e solicitar au
 Execute as tarefas seguras de maneira contínua e apresente um relatório ao concluir, indicando alterações realizadas, testes executados, resultados e eventuais impedimentos.
 
 Estas instruções não substituem as permissões e políticas de segurança da ferramenta utilizada.
+
+## Regras de Deploy e Git
+- Use o GitHub como fonte oficial do código do APPCAR.
+- Para cada implementação, siga esta ordem:
+  1. Implementar as alterações no código local.
+  2. Validar as alterações localmente.
+  3. Realizar o commit no Git.
+  4. Enviar o commit ao GitHub.
+  5. Publicar em produção pela integração automática GitHub → Vercel.
+  6. Confirmar que o commit da implantação na Vercel corresponde ao commit enviado ao GitHub.
+  7. Confirmar que o domínio oficial do APPCAR está servindo essa versão.
+- Não faça deploy direto de código local na Vercel sem autorização explícita do usuário. Para publicação de código, use a integração GitHub → Vercel.
+- Alterações de infraestrutura, variáveis de ambiente e configurações do Firebase podem ser feitas diretamente nos serviços quando autorizadas; documente o que foi alterado e onde.
+- Ao concluir cada implementação, informe o hash do commit, o status do GitHub, o status da Vercel e a versão efetivamente publicada no domínio oficial. Se algum item não puder ser confirmado, identifique-o como pendente.
+- Não altere funcionalidades existentes apenas para estabelecer ou cumprir este fluxo.

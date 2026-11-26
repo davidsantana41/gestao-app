@@ -16,8 +16,10 @@ export type GestaoCaixinhasProps = {
   dados: DadosPersistidos;
   readOnly?: boolean;
   bloquearEnvio?: boolean;
+  motivoBloqueioEnvio?: string;
+  motivoSomenteLeitura?: string;
   leitura?: LeituraCaixinhas;
-  onComando?: (alteracao: Record<string, unknown>, base: DadosPersistidos) => Promise<boolean>;
+  onComando?: (alteracao: Record<string, unknown>, base: DadosPersistidos) => Promise<false | 'confirmada' | 'enfileirada'>;
 };
 
 type AbaCaixinhas = 'ativas' | 'arquivadas' | 'conciliacao' | 'auditoria';
@@ -49,6 +51,8 @@ export default function GestaoCaixinhas({
   dados,
   readOnly = false,
   bloquearEnvio = false,
+  motivoBloqueioEnvio,
+  motivoSomenteLeitura,
   leitura,
   onComando,
 }: GestaoCaixinhasProps) {
@@ -103,9 +107,11 @@ export default function GestaoCaixinhas({
           setFeedback({ tipo: 'erro', texto: 'Os dados mudaram. Feche a revisão e abra a operação novamente.' });
           return;
         }
-        const ok = await onComando(comandoPayload, dialogo.base);
-        if (ok) {
-          setFeedback({ tipo: 'sucesso', texto: 'Operação adicionada à fila. Acompanhe a confirmação no painel.' });
+        const resultado = await onComando(comandoPayload, dialogo.base);
+        if (resultado) {
+          setFeedback({ tipo: 'sucesso', texto: resultado === 'confirmada'
+            ? 'Operação confirmada pelo serviço financeiro.'
+            : 'Operação adicionada à fila. Acompanhe a confirmação no painel.' });
           setModal(null);
         } else {
           setFeedback({ tipo: 'erro', texto: 'Não foi possível confirmar a operação no servidor.' });
@@ -137,6 +143,7 @@ export default function GestaoCaixinhas({
             type="button"
             className="botao primario"
             disabled={bloquearEnvio || ocupado}
+            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
             onClick={() => {
               setFeedback(null);
               setModal({ tipo: 'criar' });
@@ -146,6 +153,12 @@ export default function GestaoCaixinhas({
           </button>
         )}
       </div>
+      {bloquearEnvio && !readOnly && <p id="motivo-bloqueio-caixinhas" role="status" className="mensagem aviso">
+        {motivoBloqueioEnvio || 'As operações estão temporariamente indisponíveis. Confira a conexão e a fila financeira.'}
+      </p>}
+      {readOnly && leitura && <p role="status" className="mensagem aviso">
+        {motivoSomenteLeitura || 'Este acesso está em modo somente leitura; operações das caixinhas não estão disponíveis.'}
+      </p>}
       {!leitura && <p className="ajuda">A edição de caixinhas fica disponível em espaços com o serviço financeiro integrado.</p>}
 
       {/* Cartões de Indicadores */}
@@ -340,16 +353,19 @@ export default function GestaoCaixinhas({
                       <>
                         {c.estado === 'ativa' && podeAcao('deposito-caixinha') && (
                           <button type="button" className="botao secundario compacto" disabled={bloquearEnvio || ocupado}
+                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
                             onClick={() => setModal({ tipo: 'depositar', caixinha: c })}>Depositar</button>
                         )}
                         {c.estado === 'ativa' && podeAcao('retirada') && (
                           <button type="button" className="botao secundario compacto" disabled={bloquearEnvio || ocupado}
+                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
                             onClick={() => setModal({ tipo: 'retirar', caixinha: c })}>Retirar</button>
                         )}
                         <button
                           type="button"
                           className="botao secundario compacto"
                           disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-editar')}
+                          title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
                           onClick={() => setModal({ tipo: 'editar', caixinha: c })}
                         >
                           Editar
@@ -360,6 +376,7 @@ export default function GestaoCaixinhas({
                             type="button"
                             className="botao secundario compacto"
                             disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-arquivar')}
+                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
                             onClick={() => setModal({ tipo: 'arquivar', caixinha: c })}
                           >
                             Desativar
@@ -369,6 +386,7 @@ export default function GestaoCaixinhas({
                             type="button"
                             className="botao secundario compacto"
                             disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-reativar')}
+                            title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
                             onClick={() => setModal({ tipo: 'reativar', caixinha: c })}
                           >
                             Reativar
@@ -379,12 +397,9 @@ export default function GestaoCaixinhas({
                           type="button"
                           className="botao perigo compacto"
                           disabled={bloquearEnvio || ocupado || !podeAcao('caixinha-excluir')}
+                          title={bloquearEnvio ? motivoBloqueioEnvio : c.podeExcluir
+                            ? 'Excluir caixinha sem movimentos' : 'Exclusão física bloqueada por ter histórico'}
                           onClick={() => setModal({ tipo: 'excluir', caixinha: c })}
-                          title={
-                            c.podeExcluir
-                              ? 'Excluir caixinha sem movimentos'
-                              : 'Exclusão física bloqueada por ter histórico'
-                          }
                         >
                           Excluir
                         </button>

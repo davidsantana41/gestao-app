@@ -69,6 +69,12 @@ export type CaixinhaCompleta = {
   motivoBloqueioExclusao?: string;
 };
 
+export function nomeCaixinhaComOrigem(idOriginal: string, ...candidatos: unknown[]) {
+  const nomes = candidatos.filter((nome): nome is string => typeof nome === 'string' && Boolean(nome.trim()))
+    .map(nome => nome.trim());
+  return nomes.find(nome => nome !== idOriginal) ?? nomes[0] ?? idOriginal;
+}
+
 export type PendenciaRevisao = {
   id: string;
   motivo: string;
@@ -250,28 +256,30 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
     let estado: 'ativa' | 'arquivada' = 'ativa';
     let criadoEm: string | undefined;
     let auditoria: EventoAuditoriaCaixinha[] = [];
+    const reservaHistorica = proj?.evidencias.find(e => 'nome' in e && e.fonte === 'reserva-diaria' && e.nome.trim());
+    const nomeHistorico = reservaHistorica && 'nome' in reservaHistorica ? reservaHistorica.nome : undefined;
 
     if (familia === 'diaria') {
       const item = diariasMap.get(idOriginal);
       if (item) {
-        nome = item.nome || proj?.nomeConfigurado || id;
+        nome = nomeCaixinhaComOrigem(idOriginal, item.nome, proj?.nomeConfigurado, nomeHistorico);
         finalidade = item.finalidade || '';
         estado = item.estado === 'arquivada' ? 'arquivada' : 'ativa';
         criadoEm = item.criadoEm;
         auditoria = item.auditoria ?? [];
       } else {
-        nome = proj?.nomeConfigurado || idOriginal;
+        nome = nomeCaixinhaComOrigem(idOriginal, proj?.nomeConfigurado, nomeHistorico);
       }
     } else if (familia === 'fixo') {
       const item = fixosMap.get(idOriginal);
       if (item) {
-        nome = item.nome || proj?.nomeConfigurado || id;
+        nome = nomeCaixinhaComOrigem(idOriginal, item.nome, proj?.nomeConfigurado);
         finalidade = item.finalidade || '';
         estado = item.estado === 'arquivada' ? 'arquivada' : 'ativa';
         criadoEm = item.criadoEm;
         auditoria = item.auditoria ?? [];
       } else {
-        nome = proj?.nomeConfigurado || idOriginal;
+        nome = nomeCaixinhaComOrigem(idOriginal, proj?.nomeConfigurado);
       }
     } else {
       nome = nomesReservaFixa[idOriginal] || id;

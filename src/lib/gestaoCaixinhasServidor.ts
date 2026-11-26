@@ -6,7 +6,7 @@ import { centavosParaReais, somarCentavos, somarHistoricoEmCentavos } from './ce
 import { lerDados, type DadosPersistidos } from './gestao.ts';
 import { metadata, version } from './syncSession.ts';
 import { ErroServico, type TransacaoFinanceira } from './executorFinanceiroServidor.ts';
-import { obterTodasCaixinhas, type EventoAuditoriaCaixinha } from './gestaoCaixinhasIntegrada.ts';
+import { nomeCaixinhaComOrigem, obterTodasCaixinhas, type EventoAuditoriaCaixinha } from './gestaoCaixinhasIntegrada.ts';
 
 export const acoesCaixinha = ['caixinha-criar', 'caixinha-editar', 'caixinha-arquivar', 'caixinha-reativar', 'caixinha-excluir', 'caixinha-conciliar'] as const;
 type Acao = typeof acoesCaixinha[number];
@@ -183,7 +183,7 @@ export async function consultarCaixinhas(tx: Pick<TransacaoCatalogo, 'listar'>, 
         : configurada ? 'Desative a configuração de rateio ou reserva associada.' : undefined);
     const motivoExclusao = motivo ?? (caixa.movimentos.length || auditoria.some(evento => evento.caixinhaId === caixa.id && evento.lancamentoId)
       ? 'Use Desativar para preservar as movimentações.' : undefined);
-    return [{ ...caixa, estado, editavel, nome: cadastro?.nome ?? caixa.nome, finalidade: cadastro?.finalidade ?? '',
+    return [{ ...caixa, estado, editavel, nome: nomeCaixinhaComOrigem(caixa.idOriginal, cadastro?.nome, caixa.nome), finalidade: cadastro?.finalidade ?? '',
       saldoCentavos, saldo: centavosParaReais(saldoCentavos), totalCreditos, totalDebitos,
       auditoria: auditoria.filter(evento => evento.caixinhaId === caixa.id), saldoAtestado, motivoSaldoNaoAtestado: motivoSaldo,
       podeArquivar: !motivo, motivoBloqueioArquivamento: motivo, podeExcluir: !motivoExclusao, motivoBloqueioExclusao: motivoExclusao }];

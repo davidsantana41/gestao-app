@@ -257,9 +257,17 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
         <GestaoCaixinhas
           dados={dados}
           readOnly={readOnly || !financeiro?.caixinhas?.acoes.length}
+          motivoSomenteLeitura={readOnly ? 'Este espaço está em modo somente visualização.'
+            : financeiro?.caixinhas && financeiro.caixinhas.acoes.length === 0
+              ? 'O servidor não liberou comandos para este espaço. A consulta continua disponível; fale com o titular para revisar as permissões.' : undefined}
           bloquearEnvio={bloquearEnvio}
+          motivoBloqueioEnvio={financeiro?.motivoBloqueio}
           leitura={financeiro?.caixinhas}
-          onComando={financeiro?.caixinhas ? (alteracao, base) => registrar(base, () => alteracao) : undefined}
+          onComando={financeiro?.caixinhas ? async (alteracao, base) => {
+            const modo = financeiro.modoGravacao;
+            const enviado = await registrar(base, () => alteracao);
+            return enviado ? modo === 'direto' ? 'confirmada' : 'enfileirada' : false;
+          } : undefined}
         />
       )}
       {aba === 'relatorios' && <Relatorios dados={dados} caixinhas={financeiro?.caixinhas?.relatorio} onVerCaixinhas={() => setAba('caixinhas')} mes={mes} onMes={setMes} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || financeiro ? undefined : pedirExclusao} onEstornar={abrirEstorno} />}

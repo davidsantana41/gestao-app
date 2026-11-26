@@ -57,6 +57,20 @@ test('homônimas: duas caixinhas com mesmo nome têm IDs permanentes diferentes 
   assert.notEqual(homonimas[0].id, homonimas[1].id, 'IDs permanentes devem ser distintos');
 });
 
+test('recupera o nome da reserva em um lançamento histórico em vez de mostrar o UUID', () => {
+  const id = 'a521d229-2e17-4ead-baff-79ee53b58a4e';
+  const dados = {
+    ...dadosPadrao(),
+    reservasDiarias: [],
+    historico: [
+      turno('reserva-historica', { reservasDiariasDia: [{ id, nome: 'Investimento', valor: 0 }] }),
+      turno('retirada-historica', { saidas: [{ id: 'saida-carne', origem: `diaria:${id}`, nome: 'carne', valor: 0 }] }),
+    ],
+  };
+  const caixa = obterTodasCaixinhas(dados).caixinhas.find(item => item.id === `diaria:${id}`);
+  assert.equal(caixa?.nome, 'Investimento');
+});
+
 test('edição e renomeação preservam histórico e registram auditoria', () => {
   let dados = dadosPadrao();
   dados = executarCriarCaixinha(dados, { nome: 'Pneus', finalidade: 'Troca futura', autorUid: 'user-1' });

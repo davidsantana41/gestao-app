@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { abrirFilaFinanceiraOffline, geracoesDaFila, type ItemFilaFinanceira } from './filaFinanceiraOffline';
+import { decidirEstadoGravacao } from './estadoGravacaoFinanceira';
 import type { DadosPersistidos } from './gestao';
 import type { EventoAuditoriaCaixinha, obterTodasCaixinhas } from './gestaoCaixinhasIntegrada';
 
@@ -15,6 +16,7 @@ export type SessaoFinanceiraLocal = { uid: string; espacoId: string; email: stri
 type SessaoFinanceiraReal = { uid: string; espacoId: string; titular: string; readOnly: boolean; obterToken: () => Promise<string | null> };
 type Fila = Awaited<ReturnType<typeof abrirFilaFinanceiraOffline>>;
 type FilaAberta = { geracao: number; fila: Fila };
+type ComandoDiretoPendente = { operacaoId: string; geracao: number; revisao: number; assinatura: string };
 
 export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | SessaoFinanceiraReal) {
   const { uid, espacoId } = identidade;
@@ -23,12 +25,15 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   const dados = leituraConfirmada?.financeiro;
   const [itens, setItens] = useState<ItemFilaFinanceira[]>([]);
   const [geracoes, setGeracoes] = useState<number[]>([]);
+  const [filaLocalVerificada, setFilaLocalVerificada] = useState(false);
+  const [conectada, setConectada] = useState(false);
   const [aberta, setAberta] = useState<number>();
   const [erro, setErro] = useState('');
   const [ocupado, setOcupado] = useState(false);
   const [gravavel, setGravavel] = useState(!real);
   const [revisaoConfirmada, setRevisaoConfirmada] = useState<{ geracao: number; revisao: number }>();
   const fila = useRef<FilaAberta>(null);
+  const comandoDiretoPendente = useRef<ComandoDiretoPendente | undefined>(undefined);
   const operando = useRef(false);
   const sessao = useRef<{ token: string; ate: number }>(null);
 
@@ -118,14 +123,22 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void consultar().catch(falha => setErro((falha as Error).message));
-    if (!real?.readOnly) void geracoesDaFila(uid, espacoId).then(setGeracoes).catch(() => {
-      setErro('Não foi possível consultar as filas locais.');
+    setConectada(navigator.onLine);
+    if (!real?.readOnly) void geracoesDaFila(uid, espacoId).then(atuais => {
+      setGeracoes(atuais);
+      setFilaLocalVerificada(true);
+    }).catch(() => {
+      setErro('Não foi possível conferir a fila financeira local.');
     });
+    else setFilaLocalVerificada(true);
     const online = () => {
+      setConectada(true);
       if (fila.current) tentarEnvio();
       else void atualizar();
     };
+    const offline = () => setConectada(false);
     window.addEventListener('online', online);
+    window.addEventListener('offline', offline);
     const sincronizarVisivel = () => {
       if (!document.hidden && navigator.onLine && !operando.current) void atualizar();
     };
@@ -133,6 +146,7 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
     if (real) document.addEventListener('visibilitychange', sincronizarVisivel);
     return () => {
       window.removeEventListener('online', online);
+      window.removeEventListener('offline', offline);
       document.removeEventListener('visibilitychange', sincronizarVisivel);
       window.clearInterval(intervalo);
       fila.current?.fila.bloquear();
@@ -158,12 +172,57 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   const versao = dados?._sync;
   const aguardandoLeitura = Boolean(revisaoConfirmada && versao?.generation === revisaoConfirmada.geracao
     && versao.revision < revisaoConfirmada.revisao);
-  const podeSalvar = gravavel && aberta !== undefined && aberta === versao?.generation && !aguardandoLeitura
-    && !ocupado && !itens.some(item => item.estado === 'pendente' || item.estado === 'enviando');
+  const temPendenciasFila = itens.some(item => item.estado === 'pendente' || item.estado === 'enviando');
+  const filaAtualAberta = aberta !== undefined && aberta === versao?.generation;
+  const estadoGravacao = decidirEstadoGravacao({ gravavel, somenteLeitura: Boolean(real?.readOnly), ocupado,
+    aguardandoLeitura, temPendenciasFila, producao: Boolean(real), conectada, filaLocalVerificada,
+    quantidadeFilasLocais: geracoes.length, filaEstaAberta: aberta !== undefined, filaAtualAberta });
+  const { podeSalvar, modo: modoGravacao, motivo: motivoBloqueio } = estadoGravacao;
 
   async function registrar(base: DadosPersistidos, alteracao: Record<string, unknown>) {
     const ativa = fila.current, sync = base._sync;
-    if (!podeSalvar || !ativa || !sync) return false;
+    if (!podeSalvar || !sync) return false;
+    if (!ativa && modoGravacao === 'direto' && real) {
+      if (!conectada || !navigator.onLine) throw new Error('Sem conexão. A operação não foi enviada; conecte-se e tente novamente.');
+      const assinatura = JSON.stringify(alteracao);
+      const anterior = comandoDiretoPendente.current;
+      if (anterior && (anterior.geracao !== sync.generation || anterior.revisao !== sync.revision || anterior.assinatura !== assinatura)) {
+        throw new Error('A confirmação de uma operação anterior está pendente. Atualize os dados e confira o histórico antes de iniciar outra.');
+      }
+      const comando = anterior ?? { operacaoId: crypto.randomUUID(), geracao: sync.generation, revisao: sync.revision, assinatura };
+      comandoDiretoPendente.current = comando;
+      const enviado = await exclusivo(async () => {
+        const token = await obterToken();
+        if (!token) throw new Error('Autentique a conta para registrar a operação.');
+        let resposta: Response;
+        try {
+          resposta = await fetch(`/api/financeiro?espaco=${encodeURIComponent(espacoId)}`, {
+            method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(12_000),
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Appcar-Conta-Fila': uid },
+            body: JSON.stringify({ operacaoId: comando.operacaoId, geracao: comando.geracao, revisao: comando.revisao, alteracao }),
+          });
+        } catch {
+          throw new Error('Não foi possível confirmar a resposta do servidor. A mesma operação foi preservada para uma tentativa segura; não inicie outra até conferir os dados.');
+        }
+        if (!resposta.ok) {
+          const falha = await resposta.json().catch(() => ({})) as { erro?: unknown };
+          if (resposta.status >= 400 && resposta.status < 500) comandoDiretoPendente.current = undefined;
+          throw new Error(typeof falha.erro === 'string' ? falha.erro : 'O serviço recusou a operação. Atualize os dados e confira o motivo.');
+        }
+        const recibo = await resposta.json().catch(() => null) as { operacaoId?: unknown; revisao?: unknown; repetida?: unknown } | null;
+        if (recibo?.operacaoId !== comando.operacaoId || !Number.isSafeInteger(recibo.revisao)
+            || (!recibo.repetida && recibo.revisao !== sync.revision + 1)) {
+          throw new Error('O recibo do servidor não corresponde à operação. Atualize os dados antes de tentar novamente.');
+        }
+        comandoDiretoPendente.current = undefined;
+        setRevisaoConfirmada({ geracao: sync.generation, revisao: recibo.revisao as number });
+        try { await consultar(); }
+        catch { setErro('A operação foi confirmada, mas a atualização da tela falhou. Use Atualizar dados confirmados.'); }
+        return true;
+      });
+      return enviado === true;
+    }
+    if (!ativa) return false;
     if (ativa.geracao !== sync.generation) {
       throw new Error('Este formulário pertence a uma geração anterior. Confira os dados e reabra o formulário antes de enviar.');
     }
@@ -179,5 +238,5 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   }
 
   return { dados, caixinhas: leituraConfirmada?.caixinhas, itens, geracoes, aberta, erro, ocupado, podeSalvar, registrar, atualizar, tentarEnvio, desbloquear,
-    producao: Boolean(real), gravavel };
+    producao: Boolean(real), gravavel, modoGravacao, motivoBloqueio };
 }
