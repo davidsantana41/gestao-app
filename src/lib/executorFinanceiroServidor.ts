@@ -25,6 +25,7 @@ export class ErroServico extends Error {
 
 export async function confirmarComando(tx: TransacaoFinanceira, uid: string, espacoId: string, financeiro: string,
   entrada: unknown, opcoes?: { atualizarCampos: boolean; criarCusto: boolean; criarReservaDiaria?: boolean;
+    validarSaldoOrigemTransferencia?: (antes: DadosPersistidos, id: IdCaixinha, valorCentavos: number) => Promise<void>;
     validarSaldos?: (antes: DadosPersistidos, depois: DadosPersistidos, ids: IdCaixinha[]) => Promise<void> }) {
   let comando;
   try {
@@ -38,7 +39,10 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
   const evento = espaco + '/operacoes/' + comando.operacaoId;
 
   const controle = await tx.get(espaco);
-  if (!podeExecutarComandoFinanceiro(uid, controle, comando.tipo)) {
+  const permissao = comando.tipo === 'transferencia-interna'
+    ? comando.origem === 'principal' ? 'deposito-caixinha' : 'retirada'
+    : comando.tipo;
+  if (!podeExecutarComandoFinanceiro(uid, controle, permissao)) {
     throw new ErroServico(403, 'Operação não autorizada neste espaço.');
   }
   const documento = await tx.get(financeiro);
@@ -72,7 +76,25 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
       }
     }
   }
-  const depois = validarMovimentos(() => montarFinanceiro(antes, comando));
+  let depois = validarMovimentos(() => montarFinanceiro(antes, comando));
+  const confirmadoEm = comando.tipo === 'transferencia-interna' ? tx.agora() : undefined;
+  if (comando.tipo === 'transferencia-interna') {
+    if (comando.origem !== 'principal') {
+      const origem = comando.origem as IdCaixinha;
+      if (opcoes?.validarSaldoOrigemTransferencia) {
+        await opcoes.validarSaldoOrigemTransferencia(antes, origem, Math.round(comando.valor * 100));
+      } else {
+        validarMovimentos(() => {
+          const disponivel = saldoVerificavelEmCentavos(antes, origem);
+          if (disponivel < Math.round(comando.valor * 100)) {
+            throw new Error('O valor excede o saldo disponível da caixinha de origem.');
+          }
+        });
+      }
+    }
+    depois = { ...depois, historico: depois.historico.map(item => item.id === comando.operacaoId
+      ? { ...item, confirmadoEm } : item) };
+  }
   const { ids, alteraPendencias } = caixinhasAfetadas(antes, depois);
   if (alteraPendencias) throw new ErroServico(422, 'A alteração afeta referências ambíguas.');
   await opcoes?.validarSaldos?.(antes, depois, ids);
@@ -130,7 +152,11 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
   tx.set(evento, {
     id: comando.operacaoId, espacoId, assinatura, autorUid: uid, geracao: sync.generation,
     revisaoAnterior: revisao, revisao: proximaRevisao, tipo: comando.tipo,
-    lancamentoId, caixinhas: ids.sort(), confirmadoEm: tx.agora(),
+    lancamentoId, caixinhas: ids.sort(), confirmadoEm: confirmadoEm ?? tx.agora(),
+    ...(comando.tipo === 'transferencia-interna' && {
+      origem: comando.origem, destino: comando.destino, nomeOrigem: comando.nomeOrigem,
+      nomeDestino: comando.nomeDestino, valor: comando.valor, descricao: comando.descricao,
+    }),
     ...((comando.tipo === 'estornar' || (comando.tipo === 'turno' && comando.alvo)) && {
       antes: antes.historico.find(h => h.id === lancamentoId) ?? null,
       depois: depois.historico.find(h => h.id === lancamentoId) ?? null,

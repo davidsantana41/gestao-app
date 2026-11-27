@@ -9,11 +9,11 @@ export function Historico({ itens, onEditar, onExcluir, onEstornar }: { itens: L
       const r = resultado(h);
       return <tr key={h.id} role="row">
         <td role="cell" data-coluna="Data"><div>{h.data}<small>{h.diaSemana}</small></div></td>
-        <td role="cell" data-coluna="Lançamento"><div>{h.tipo === 'turno' ? 'Turno de trabalho' : h.descricao}<small>{h.tipo === 'turno' ? (h.reservasDiariasDia ?? []).map(r => `${r.nome || 'Reserva antiga'}: ${moeda(r.valor)}`).join(' · ') : h.depositoCaixinha ? 'Depósito em caixinha' : h.tipo === 'avulso_entrada' ? 'Entrada avulsa' : 'Saída avulsa'}</small>{h.estornadoPor && <small>Estornado · {h.motivoEstorno}</small>}</div></td>
-        <td role="cell" data-coluna="Faturamento / valor">{moeda(h.tipo === 'avulso_saida' ? (h.saidas ?? []).reduce((s, r) => s + r.valor, 0) : h.faturamentoBruto)}</td>
+        <td role="cell" data-coluna="Lançamento"><div>{h.tipo === 'turno' ? 'Turno de trabalho' : h.tipo === 'transferencia-interna' ? 'Transferência interna' : h.descricao}<small>{h.tipo === 'turno' ? (h.reservasDiariasDia ?? []).map(r => `${r.nome || 'Reserva antiga'}: ${moeda(r.valor)}`).join(' · ') : h.tipo === 'transferencia-interna' ? `${h.transferenciaInterna?.nomeOrigem ?? 'Origem'} → ${h.transferenciaInterna?.nomeDestino ?? 'Destino'}` : h.depositoCaixinha ? 'Depósito em caixinha' : h.tipo === 'avulso_entrada' ? 'Entrada avulsa' : 'Saída avulsa'}</small>{h.estornadoPor && <small>Estornado · {h.motivoEstorno}</small>}</div></td>
+        <td role="cell" data-coluna="Faturamento / valor">{h.tipo === 'transferencia-interna' ? moeda(h.transferenciaInterna?.valor ?? 0) : moeda(h.tipo === 'avulso_saida' ? (h.saidas ?? []).reduce((s, r) => s + r.valor, 0) : h.faturamentoBruto)}</td>
         <td role="cell" data-coluna="Despesas e reservas">{moeda(r.despesas)}</td>
         <td role="cell" data-coluna="Saldo principal" data-saldo={sinalSaldo(r.liquido)}>{moeda(r.liquido)}</td>
-        <td role="cell">{!h.estornadoPor && <div className="acoes">{onEditar && h.tipo === 'turno' && <button type="button" className="botao discreto" onClick={() => onEditar(h)}>Editar</button>}{onExcluir && <button type="button" className="botao discreto perigo" onClick={() => onExcluir(h)}>Excluir</button>}{onEstornar && <button type="button" className="botao discreto perigo" onClick={() => onEstornar(h)}>Estornar</button>}</div>}</td>
+        <td role="cell">{!h.estornadoPor && <div className="acoes">{onEditar && h.tipo === 'turno' && <button type="button" className="botao discreto" onClick={() => onEditar(h)}>Editar</button>}{onExcluir && h.tipo !== 'transferencia-interna' && <button type="button" className="botao discreto perigo" onClick={() => onExcluir(h)}>Excluir</button>}{onEstornar && <button type="button" className="botao discreto perigo" onClick={() => onEstornar(h)}>Estornar</button>}</div>}</td>
       </tr>;
     })}</tbody></table></div>}
   </section>;

@@ -1,8 +1,8 @@
 'use client';
 
 import { useId, useMemo, useState } from 'react';
-import { dataLocal, moeda, numero, type DadosPersistidos } from '@/lib/gestao';
-import { reaisParaCentavos } from '@/lib/centavosFinanceiros';
+import { dataLocal, moeda, numero, resumir, type DadosPersistidos } from '@/lib/gestao';
+import { centavosParaReais, reaisParaCentavos } from '@/lib/centavosFinanceiros';
 import {
   obterTodasCaixinhas,
   type EventoAuditoriaCaixinha,
@@ -29,6 +29,7 @@ const rotulosMovimento: Record<CaixinhaCompleta['movimentos'][number]['tipo'], s
   'rateio-fixo': 'Rateio de custo fixo',
   'reserva-fixa': 'Reserva fixa',
   retirada: 'Retirada',
+  'transferencia-interna': 'Transferência interna',
   conciliacao: 'Vínculo confirmado',
 };
 
@@ -41,6 +42,7 @@ const rotulosAuditoria: Record<EventoAuditoriaCaixinha['acao'], string> = {
   conciliar: 'Vínculo confirmado',
   depositar: 'Depósito',
   retirar: 'Retirada',
+  transferir: 'Transferir',
   estornar: 'Estorno',
   corrigir: 'Correção',
 };
@@ -49,7 +51,7 @@ type ModalEstado =
   | { tipo: 'criar' }
   | { tipo: 'visualizar'; caixinha: CaixinhaCompleta }
   | { tipo: 'editar'; caixinha: CaixinhaCompleta }
-  | { tipo: 'depositar' | 'retirar'; caixinha: CaixinhaCompleta }
+  | { tipo: 'reservar' | 'transferir'; caixinha: CaixinhaCompleta }
   | { tipo: 'arquivar'; caixinha: CaixinhaCompleta }
   | { tipo: 'reativar'; caixinha: CaixinhaCompleta }
   | { tipo: 'excluir'; caixinha: CaixinhaCompleta }
@@ -81,6 +83,7 @@ export default function GestaoCaixinhas({
   const nomesPorId = new Map(relatorio.caixinhas.map(caixinha => [caixinha.id, caixinha.nome]));
   const podeAcao = (acao: string) => !readOnly && leitura?.acoes.includes(acao) === true;
   const saldoConfirmado = relatorio.caixinhas.every(c => c.saldoAtestado);
+  const saldoPrincipalCentavos = reaisParaCentavos(resumir(dados.historico).liquido);
 
   const caixinhasAtivas = useMemo(
     () => relatorio.caixinhas.filter(c => c.estado === 'ativa'),
@@ -108,7 +111,10 @@ export default function GestaoCaixinhas({
     setFeedback(null);
     setOcupado(true);
     try {
-        if (bloquearEnvio || !podeAcao(String(comandoPayload.tipo))) {
+        const acao = comandoPayload.tipo === 'transferencia-interna'
+          ? comandoPayload.origem === 'principal' ? 'deposito-caixinha' : 'retirada'
+          : String(comandoPayload.tipo);
+        if (bloquearEnvio || !podeAcao(acao)) {
           setFeedback({ tipo: 'erro', texto: 'A operação está indisponível no momento. Confira o estado da fila.' });
           return;
         }
@@ -197,7 +203,7 @@ export default function GestaoCaixinhas({
           </strong>
           <small>
             {relatorio.totalPendencias === 0
-              ? 'Nenhuma movimenta??o para revisar'
+              ? 'Nenhuma movimentação para revisar'
               : `${relatorio.totalPendencias} registro(s) para revisar`}
           </small>
         </div>
@@ -341,12 +347,12 @@ export default function GestaoCaixinhas({
                     {!readOnly && c.estado === 'ativa' && podeAcao('deposito-caixinha') && (
                       <button type="button" className="botao primario compacto" disabled={bloquearEnvio || ocupado}
                         title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
-                        onClick={() => setModal({ tipo: 'depositar', caixinha: c })}>Depositar</button>
+                        onClick={() => setModal({ tipo: 'reservar', caixinha: c })}>Reservar</button>
                     )}
                     {!readOnly && c.estado === 'ativa' && podeAcao('retirada') && (
                       <button type="button" className="botao primario compacto" disabled={bloquearEnvio || ocupado}
                         title={bloquearEnvio ? motivoBloqueioEnvio : undefined}
-                        onClick={() => setModal({ tipo: 'retirar', caixinha: c })}>Retirar</button>
+                        onClick={() => setModal({ tipo: 'transferir', caixinha: c })}>Transferir</button>
                     )}
                     <button
                       type="button"
@@ -422,8 +428,7 @@ export default function GestaoCaixinhas({
                         {p.data && ` · ${p.data}`}
                       </h4>
                       <p className="item-pendencia-referencia">
-                        Origem original: <code>{p.referenciaOriginal || 'Sem referência'}</code>
-                        {p.lancamentoId && ` · Lançamento: ${p.lancamentoId}`}
+                        A referência original está preservada para auditoria.
                       </p>
                     </div>
 
@@ -516,6 +521,7 @@ export default function GestaoCaixinhas({
                           </span>
                         )}
                         {e.acao === 'criar' && <span>Nome: {e.nomeNovo}</span>}
+                        {e.acao === 'transferir' && <span>{e.nomeOrigem} → {e.nomeDestino} · {e.valor !== undefined && moeda(e.valor)}</span>}
                         {e.lancamentoId && e.acao !== 'conciliar' && <span>Lançamento {e.lancamentoId}</span>}
                         {e.acao === 'conciliar' && e.vinculo && (
                           <span>
@@ -553,37 +559,17 @@ export default function GestaoCaixinhas({
         <ModalVisualizarCaixinha caixinha={modal.caixinha} onFechar={() => setModal(null)} />
       )}
 
-      {(modal?.tipo === 'depositar' || modal?.tipo === 'retirar') && (
-        <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="movimentar-caixinha">
-          <form className="painel modal-conteudo pilha" onSubmit={evento => {
-            evento.preventDefault();
-            const campos = new FormData(evento.currentTarget);
-            const valor = numero(String(campos.get('valor') ?? ''));
-            try {
-              const valorCentavos = reaisParaCentavos(valor);
-              if (valorCentavos < 1) throw new Error('Informe um valor maior que zero.');
-              const { caixinha } = modal;
-              void aplicarAlteracao({
-                data: dataLocal(), descricao: String(campos.get('descricao') ?? ''), valorCentavos,
-                ...(modal.tipo === 'depositar'
-                  ? { tipo: 'deposito-caixinha', caixinhaId: caixinha.id }
-                  : { tipo: 'retirada', origem: caixinha.familia === 'diaria' ? caixinha.id : caixinha.idOriginal }),
-              });
-            } catch (erro) {
-              setFeedback({ tipo: 'erro', texto: (erro as Error).message });
-            }
-          }}>
-            <h3 id="movimentar-caixinha">{modal.tipo === 'depositar' ? 'Depositar' : 'Retirar'} · {modal.caixinha.nome}</h3>
-            <p className="ajuda">{modal.tipo === 'depositar' ? 'O valor sairá do Saldo principal e entrará nesta caixinha.' : 'O valor será debitado desta caixinha.'}</p>
-            <label className="campo"><span>Valor (R$)</span><input name="valor" inputMode="decimal" required /></label>
-            <label className="campo"><span>Descrição</span><input name="descricao" maxLength={300} required /></label>
-            {feedback?.tipo === 'erro' && <p role="alert" className="mensagem erro">{feedback.texto}</p>}
-            <div className="acoes">
-              <button type="button" className="botao secundario" onClick={() => setModal(null)}>Cancelar</button>
-              <button type="submit" className="botao primario" disabled={bloquearEnvio || ocupado}>Confirmar</button>
-            </div>
-          </form>
-        </div>
+      {(modal?.tipo === 'reservar' || modal?.tipo === 'transferir') && (
+        <ModalTransferencia
+          modo={modal.tipo}
+          caixinha={modal.caixinha}
+          caixinhas={caixinhasAtivas.filter(c => c.editavel !== false)}
+          saldoPrincipalCentavos={saldoPrincipalCentavos}
+          saldoReservadoCentavos={saldoConfirmado ? relatorio.totalSaldoCentavos : null}
+          ocupado={ocupado || bloquearEnvio}
+          onCancelar={() => setModal(null)}
+          onConfirmar={transferencia => void aplicarAlteracao({ tipo: 'transferencia-interna', ...transferencia })}
+        />
       )}
 
       {modal?.tipo === 'editar' && (
@@ -642,6 +628,101 @@ export default function GestaoCaixinhas({
 // ---------------------------------------------------------------------------
 // SUBCOMPONENTES / MODAIS
 // ---------------------------------------------------------------------------
+
+function ModalTransferencia({ modo, caixinha, caixinhas, saldoPrincipalCentavos, saldoReservadoCentavos, ocupado,
+  onCancelar, onConfirmar }: {
+  modo: 'reservar' | 'transferir'; caixinha: CaixinhaCompleta; caixinhas: CaixinhaCompleta[];
+  saldoPrincipalCentavos: number; saldoReservadoCentavos: number | null; ocupado: boolean;
+  onCancelar: () => void; onConfirmar: (alteracao: Record<string, unknown>) => void;
+}) {
+  const [destino, setDestino] = useState<string>(modo === 'reservar' ? caixinha.id : 'principal');
+  const [valor, setValor] = useState('');
+  const [descricao, setDescricao] = useState('');
+  const [erro, setErro] = useState('');
+  type DestinoTransferencia = { id: string; nome: string; estado?: string; saldoAtestado?: boolean; saldoCentavos?: number };
+  const principal: DestinoTransferencia = { id: 'principal', nome: 'Saldo principal' };
+  const origem = modo === 'reservar' ? principal : caixinha;
+  const destinoSelecionado: DestinoTransferencia | undefined = modo === 'reservar' ? caixinha : destino === 'principal' ? principal : caixinhas.find(c => c.id === destino);
+  const origemId = modo === 'reservar' ? 'principal' : caixinha.id;
+  const destinoId = modo === 'reservar' ? caixinha.id : destino;
+  const origemSaldoCentavos = modo === 'reservar' ? saldoPrincipalCentavos : caixinha.saldoAtestado ? caixinha.saldoCentavos : null;
+  const destinoSaldoCentavos = destinoId === 'principal' ? saldoPrincipalCentavos
+    : destinoSelecionado?.saldoAtestado ? destinoSelecionado.saldoCentavos ?? null : null;
+  let valorCentavos: number | null = null;
+  try { valorCentavos = reaisParaCentavos(numero(valor)); } catch { /* A prévia aguarda um valor válido em centavos. */ }
+  const validaValor = valorCentavos !== null && valorCentavos > 0
+    && origemSaldoCentavos !== null && valorCentavos <= origemSaldoCentavos;
+  const deltaPrincipal = (origemId === 'principal' ? -(valorCentavos ?? 0) : 0)
+    + (destinoId === 'principal' ? valorCentavos ?? 0 : 0);
+  const deltaReservado = (origemId === 'principal' ? 0 : -(valorCentavos ?? 0))
+    + (destinoId === 'principal' ? 0 : valorCentavos ?? 0);
+  const mostrarSaldo = (centavos: number | null) => centavos === null ? 'Em revisão' : moeda(centavosParaReais(centavos));
+  const saldoPrincipalDepois = validaValor ? saldoPrincipalCentavos + deltaPrincipal : null;
+  const saldoReservadoDepois = validaValor && saldoReservadoCentavos !== null ? saldoReservadoCentavos + deltaReservado : null;
+  const saldoConsolidadoDepois = saldoPrincipalDepois !== null && saldoReservadoDepois !== null
+    ? saldoPrincipalDepois + saldoReservadoDepois : null;
+  const saldoOrigemDepois = validaValor && origemId !== 'principal' && origemSaldoCentavos !== null
+    ? origemSaldoCentavos - (valorCentavos ?? 0) : null;
+  const saldoDestinoDepois = validaValor && destinoId !== 'principal' && destinoSaldoCentavos !== null
+    ? destinoSaldoCentavos + (valorCentavos ?? 0) : null;
+  const ativosDestino = caixinhas.filter(c => c.estado === 'ativa' && c.editavel !== false && c.id !== origemId);
+
+  const submit = (evento: React.FormEvent) => {
+    evento.preventDefault();
+    setErro('');
+    if (origemSaldoCentavos === null || (origemId !== 'principal' && !caixinha.saldoAtestado)) {
+      setErro('O saldo da origem está em revisão. Resolva as pendências antes de transferir.'); return;
+    }
+    if (!valorCentavos || valorCentavos < 1) { setErro('Informe um valor válido, maior que zero.'); return; }
+    if (valorCentavos > origemSaldoCentavos) { setErro('O valor excede o saldo disponível na origem.'); return; }
+    if (!destinoSelecionado || destinoId === origemId) { setErro('Escolha um destino diferente da origem.'); return; }
+    if (destinoId !== 'principal' && (destinoSelecionado.estado !== 'ativa' || !destinoSelecionado.saldoAtestado)) {
+      setErro('O destino está desativado ou com saldo em revisão. Escolha outro destino.'); return;
+    }
+    onConfirmar({ data: dataLocal(), origem: origemId, destino: destinoId,
+      nomeOrigem: origem.nome, nomeDestino: destinoSelecionado.nome, valorCentavos, descricao: descricao.trim() });
+  };
+
+  return <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="modal-transferencia-titulo">
+    <form className="painel modal-conteudo pilha" onSubmit={submit}>
+      <h3 id="modal-transferencia-titulo">{modo === 'reservar' ? `Reservar em ${caixinha.nome}` : `Transferir de ${caixinha.nome}`}</h3>
+      <div className="grade-metricas pequena">
+        <div className="metrica"><span>Origem</span><strong>{origem.nome}</strong></div>
+        <div className="metrica"><span>Saldo disponível</span><strong>{mostrarSaldo(origemSaldoCentavos)}</strong></div>
+      </div>
+      {modo === 'reservar' ? <div className="campo"><span>Destino</span><strong>{caixinha.nome}</strong></div>
+        : <label className="campo"><span>Destino</span><select value={destino} onChange={e => setDestino(e.currentTarget.value)}>
+          <option value="principal">Saldo principal · {mostrarSaldo(saldoPrincipalCentavos)}</option>
+          {ativosDestino.map(c => <option key={c.id} value={c.id} disabled={!c.saldoAtestado}>
+            {c.nome} · {mostrarSaldo(c.saldoAtestado ? c.saldoCentavos : null)}
+          </option>)}
+        </select></label>}
+      <div className="duas-colunas">
+        <label className="campo"><span>Valor (R$)</span><input value={valor} inputMode="decimal" onChange={e => setValor(e.currentTarget.value)} required /></label>
+        <button type="button" className="botao secundario" disabled={ocupado || origemSaldoCentavos === null || origemSaldoCentavos <= 0}
+          onClick={() => origemSaldoCentavos !== null && setValor(String(centavosParaReais(origemSaldoCentavos)).replace('.', ','))}>Transferir tudo</button>
+      </div>
+      <label className="campo"><span>Descrição (opcional)</span><input value={descricao} onChange={e => setDescricao(e.currentTarget.value)} maxLength={300} /></label>
+      <section className="painel resumo-transferencia" aria-live="polite">
+        <h4>Prévia após a transferência</h4>
+        <dl className="detalhes">
+          {origemId !== 'principal' && <div><dt>{origem.nome}</dt><dd>{mostrarSaldo(saldoOrigemDepois)}</dd></div>}
+          {destinoId !== 'principal' && <div><dt>{destinoSelecionado?.nome ?? 'Caixinha de destino'}</dt><dd>{mostrarSaldo(saldoDestinoDepois)}</dd></div>}
+          <div><dt>Saldo principal</dt><dd>{mostrarSaldo(saldoPrincipalDepois)}</dd></div>
+          <div><dt>Total reservado nas caixinhas</dt><dd>{mostrarSaldo(saldoReservadoDepois)}</dd></div>
+          <div><dt>Saldo financeiro consolidado</dt><dd>{mostrarSaldo(saldoConsolidadoDepois)}</dd></div>
+        </dl>
+      </section>
+      {erro && <p role="alert" className="mensagem erro">{erro}</p>}
+      <div className="acoes">
+        <button type="button" className="botao secundario" onClick={onCancelar} disabled={ocupado}>Cancelar</button>
+        <button type="submit" className="botao primario" disabled={ocupado || !validaValor || !destinoSelecionado || destinoId === origemId}>
+          Confirmar transferência
+        </button>
+      </div>
+    </form>
+  </div>;
+}
 
 function ModalCriarCaixinha({
   ocupado,
@@ -1267,9 +1348,7 @@ function ModalConciliarVinculo({
             </div>
             <div>
               <dt>Referência registrada</dt>
-              <dd>
-                <code>{pendencia.referenciaOriginal || 'Sem referência'}</code>
-              </dd>
+              <dd>O registro original permanece preservado para auditoria.</dd>
             </div>
           </dl>
         </div>
@@ -1284,7 +1363,7 @@ function ModalConciliarVinculo({
             >
               {caixinhas.map(c => (
                 <option key={c.id} value={c.id}>
-                  {c.nome} ({c.id}) · Saldo: {moeda(c.saldo)}
+                  {c.nome} · Saldo: {moeda(c.saldo)}
                 </option>
               ))}
             </select>

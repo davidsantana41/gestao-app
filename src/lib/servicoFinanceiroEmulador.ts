@@ -9,7 +9,7 @@ import { metadata, version } from './syncSession.ts';
 import { exigirOperacaoAdministrativa } from './identidadeFinanceiraServidor.ts';
 import { criarBackupFinanceiro } from './backupFinanceiroServidor.ts';
 import { ErroAdministrativo, executarAdministracaoEmulador } from './administracaoFinanceiraEmulador.ts';
-import { acaoDeCaixinha, confirmarCaixinha, consultarCaixinhas, validarSaldosConciliados, type TransacaoCatalogo } from './gestaoCaixinhasServidor.ts';
+import { acaoDeCaixinha, confirmarCaixinha, consultarCaixinhas, validarSaldoOrigemTransferencia, validarSaldosConciliados, type TransacaoCatalogo } from './gestaoCaixinhasServidor.ts';
 
 export const projetoFinanceiroEmulador = 'demo-appcar-financeiro';
 const host = '127.0.0.1';
@@ -83,6 +83,7 @@ async function confirmar(db: Firestore, uid: string, espacoId: string, entrada: 
     if (gestaoCaixinhas && acaoDeCaixinha(tipo)) return confirmarCaixinha(adaptador, uid, espaco, financeiro, entrada);
     return confirmarComando(adaptador, uid, espacoId, financeiro, entrada, gestaoCaixinhas ? {
       atualizarCampos: true, criarCusto: true, criarReservaDiaria: true,
+      validarSaldoOrigemTransferencia: (antes, id, valor) => validarSaldoOrigemTransferencia(adaptador, espaco, antes, id, valor),
       validarSaldos: (antes, depois, ids) => validarSaldosConciliados(adaptador, espaco, antes, depois, ids),
     } : undefined);
   });

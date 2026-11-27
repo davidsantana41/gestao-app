@@ -1,4 +1,5 @@
 import type { SyncMetadata } from './syncSession';
+import { centavosParaReais, somarCentavos, somarHistoricoEmCentavos } from './centavosFinanceiros.ts';
 
 export interface SaidaItem {
   id: string;
@@ -18,6 +19,16 @@ export interface ReservaDiariaItem {
   id: string;
   nome: string;
   valor: number;
+}
+
+export type PontaTransferencia = 'principal' | `${'diaria' | 'fixo' | 'reserva-fixa'}:${string}`;
+export interface TransferenciaInterna {
+  origem: PontaTransferencia;
+  destino: PontaTransferencia;
+  nomeOrigem: string;
+  nomeDestino: string;
+  valor: number;
+  descricao: string;
 }
 
 
@@ -124,6 +135,14 @@ export function criarTurno(form: TurnoFormulario, custos: CustoFixoItem[], id: s
 
 export function resultado(item: Lancamento) {
   if (item.estornadoPor) return { despesas: 0, liquido: 0 };
+  if (item.tipo === 'transferencia-interna') {
+    const valor = item.transferenciaInterna?.valor ?? 0;
+    return {
+      despesas: 0,
+      liquido: (item.transferenciaInterna?.origem === 'principal' ? -valor : 0)
+        + (item.transferenciaInterna?.destino === 'principal' ? valor : 0),
+    };
+  }
   // Retiradas de dinheiro já separado não descontam o saldo principal outra vez.
   const despesas = item.tipo === 'avulso_saida' ? (item.saidas ?? []).reduce((s, r) => s + (r.origem === 'principal' ? r.valor : 0), 0) : item.totalDespesas;
   return { despesas, liquido: item.tipo === 'avulso_saida' ? -despesas : item.liquido };
@@ -156,7 +175,28 @@ export function resumir(historico: Lancamento[]) {
       } else caixinhas[saida.origem] = (caixinhas[saida.origem] ?? 0) - saida.valor;
     }
   }
+  liquido = centavosParaReais(somarHistoricoEmCentavos(
+    historico.filter(h => !h.estornadoPor).map(h => resultado(h).liquido),
+  ));
   return { faturamento, despesas, liquido, combustivel, km, litros, dias: dias.size, caixinhas, reservas };
+}
+
+export function calcularSaldosFinanceiros(historico: Lancamento[], saldoReservadoCentavos?: number | null) {
+  const dados = resumir(historico);
+  const principalCentavos = somarHistoricoEmCentavos(
+    historico.filter(h => !h.estornadoPor).map(h => resultado(h).liquido),
+  );
+  const reservadoCentavos = saldoReservadoCentavos === undefined
+    ? somarHistoricoEmCentavos([
+      ...Object.values(dados.caixinhas),
+      ...Object.values(dados.reservas).map(reserva => reserva.valor),
+    ])
+    : saldoReservadoCentavos;
+  return {
+    principalCentavos,
+    reservadoCentavos,
+    consolidadoCentavos: reservadoCentavos === null ? null : somarCentavos([principalCentavos, reservadoCentavos]),
+  };
 }
 
 export interface Lancamento {
@@ -167,7 +207,9 @@ export interface Lancamento {
   depositoCaixinha?: string;
   estornadoPor?: string;
   motivoEstorno?: string;
-  tipo: 'turno' | 'avulso_saida' | 'avulso_entrada';
+  tipo: 'turno' | 'avulso_saida' | 'avulso_entrada' | 'transferencia-interna';
+  transferenciaInterna?: TransferenciaInterna;
+  confirmadoEm?: unknown;
   faturamentoBruto: number;
   combustivel: number;
   litros: number;

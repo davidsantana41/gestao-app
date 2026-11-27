@@ -28,6 +28,7 @@ const rotulosAuditoria = {
   'caixinha-conciliar': 'conciliar',
   'deposito-caixinha': 'depositar',
   retirada: 'retirar',
+  'transferencia-interna': 'transferir',
   estornar: 'estornar',
   turno: 'corrigir',
 } as const;
@@ -86,9 +87,10 @@ async function pendenciasDoEspaco(dados: DadosPersistidos, vinculos: Vinculo[]) 
 
 function saldo(evidencias: readonly Evidencia[]) {
   return somarHistoricoEmCentavos(evidencias.filter(e => e.fonte !== 'configuracao').map(e => {
-    const valor = e.valor;
+    const valor = e.fonte === 'transferencia-interna' ? Math.abs(e.valor) : e.valor;
     if (!Number.isFinite(valor) || valor < 0) throw new Error('Valor histórico inválido.');
-    return e.fonte === 'retirada' ? -valor : valor;
+    return e.fonte === 'retirada' ? -valor
+      : e.fonte === 'transferencia-interna' ? Math.sign(e.valor) * valor : valor;
   }));
 }
 
@@ -102,6 +104,19 @@ export function saldoComVinculos(dados: DadosPersistidos, id: IdCaixinha, vincul
       || !movimentosConciliados.has(chaveMovimentoConciliavel(e.lancamentoId, e.fonte, e.indice)),
   );
   return saldo([...evidenciasAtivas, ...vinculos.filter(item => item.caixinhaId === id).map(item => item.evidencia)]);
+}
+
+export async function validarSaldoOrigemTransferencia(tx: Pick<TransacaoCatalogo, 'listar'>, espaco: string,
+  dados: DadosPersistidos, id: IdCaixinha, valorCentavos: number) {
+  const vinculos = await vinculosDoEspaco(tx, espaco, dados);
+  const pendencias = await pendenciasDoEspaco(dados, vinculos);
+  if (pendencias.some(p => p.referencia === id || p.candidatos.some(c => c.caixinha.id === id))) {
+    throw new ErroServico(422, 'O saldo da caixinha de origem está em revisão.');
+  }
+  let disponivel: number;
+  try { disponivel = saldoComVinculos(dados, id, vinculos); }
+  catch (erro) { throw new ErroServico(422, (erro as Error).message); }
+  if (disponivel < valorCentavos) throw new ErroServico(422, 'O valor excede o saldo disponível da caixinha de origem.');
 }
 
 export async function validarSaldosConciliados(tx: Pick<TransacaoCatalogo, 'listar'>, espaco: string,
@@ -144,6 +159,11 @@ export async function consultarCaixinhas(tx: Pick<TransacaoCatalogo, 'listar'>, 
     return ids.map(caixinhaId => ({
       id, acao, caixinhaId, autorUid,
       lancamentoId: typeof evento.lancamentoId === 'string' ? evento.lancamentoId : undefined,
+      valor: typeof evento.valor === 'number' ? evento.valor : undefined,
+      origem: typeof evento.origem === 'string' ? evento.origem : undefined,
+      destino: typeof evento.destino === 'string' ? evento.destino : undefined,
+      nomeOrigem: typeof evento.nomeOrigem === 'string' ? evento.nomeOrigem : undefined,
+      nomeDestino: typeof evento.nomeDestino === 'string' ? evento.nomeDestino : undefined,
       confirmadoEm: (evento.confirmadoEm as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? '',
       motivo: typeof evento.motivo === 'string' ? evento.motivo : undefined,
       nomeAnterior: antes?.nome, nomeNovo: depois?.nome, finalidade: depois?.finalidade,

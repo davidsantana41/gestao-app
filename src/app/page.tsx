@@ -25,7 +25,7 @@ import { reaisParaCentavos } from '@/lib/centavosFinanceiros';
 import { useCompartilhamento, type EstadoCompartilhamento } from '@/lib/useCompartilhamento';
 import ContaCompartilhamento from '@/components/ContaCompartilhamento';
 import type { EspacoSelecionado } from '@/components/Compartilhamento';
-import { dataLocal, moeda, numero, resumir, type DadosPersistidos, type Lancamento } from '@/lib/gestao';
+import { calcularSaldosFinanceiros, dataLocal, moeda, numero, resumir, type DadosPersistidos, type Lancamento } from '@/lib/gestao';
 
 function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; onSalvar: (texto: string, base: string) => boolean | Promise<boolean>; readOnly?: boolean }) {
   const [base, setBase] = useState(inicial);
@@ -142,6 +142,9 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
   if (!dados && !storage) return null;
   if (!dados) return <main className="acesso"><section className="painel"><AppcarLogo subtitulo="Carregando..." centralizado /><h1>{storage?.erro ? 'Vamos recuperar seus dados' : 'Carregando seu painel'}</h1><p role={storage?.erro ? 'alert' : 'status'}>{storage?.erro || storage?.status}</p>{storage?.erro && <button className="botao primario" onClick={storage.tentarNovamente}>Tentar novamente</button>}</section></main>;
   const resumo = resumir(dados.historico);
+    const relatorioCaixinhas = financeiro?.caixinhas?.relatorio;
+    const saldos = calcularSaldosFinanceiros(dados.historico,
+      relatorioCaixinhas?.caixinhas.every(caixa => caixa.saldoAtestado) ? relatorioCaixinhas.totalSaldoCentavos : null);
   const bloquearEnvio = Boolean(financeiro && !financeiro.podeSalvar);
   const paraCentavos = (valor: string) => reaisParaCentavos(numero(valor));
   const registrar = async (base: typeof dados, criarComando: () => Record<string, unknown>) => {
@@ -224,7 +227,7 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
         const resumoVersao = resumir(versao.historico);
         return <div key={String(nome)}><h3>{String(nome)}</h3><p>{versao.historico.length} lançamentos</p><p>Saldo principal: <strong data-saldo={sinalSaldo(resumoVersao.liquido)}>{moeda(resumoVersao.liquido)}</strong></p></div>;
       })}</div><p>As duas cópias serão guardadas neste navegador antes da troca. A quantidade de lançamentos não indica qual versão é mais recente. Você também pode exportar um backup dos dados em uso.</p>{storage.geracaoAnterior && <p className="mensagem aviso">Esta cópia pertence a uma geração anterior à reinicialização. Exporte-a se precisar consultar os registros antigos. Ela não pode substituir os dados atuais.</p>}<div className="acoes"><button type="button" className="botao primario" disabled={storage.geracaoAnterior} onClick={() => escolher('local')}>Usar dados deste navegador</button><button type="button" className="botao secundario" onClick={() => escolher('nuvem')}>Usar dados da nuvem</button></div></section>}
-      <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque" data-saldo={sinalSaldo(resumo.liquido)}><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
+        <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque" data-saldo={sinalSaldo(resumo.liquido)}><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Total reservado nas caixinhas</span><strong>{saldos.reservadoCentavos === null ? 'Em revisão' : moeda(saldos.reservadoCentavos / 100)}</strong><small>Saldos atestados</small></div><div className="metrica"><span>Saldo financeiro consolidado</span><strong>{saldos.consolidadoCentavos === null ? 'Em revisão' : moeda(saldos.consolidadoCentavos / 100)}</strong><small>Principal + caixinhas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
       <nav className="abas" aria-label="Seções do painel">{[['turno','Registrar turno'], ['caixinhas','Caixinhas'], ['relatorios','Histórico e relatórios'], ['configuracoes','Custos fixos'], ['privacidade','Privacidade']].map(([id, nome]) => <button type="button" key={id} aria-current={aba === id ? 'page' : undefined} onClick={() => setAba(id)}>{nome}</button>)}</nav>
       {mensagem && <p role={financeiro ? 'alert' : 'status'} className={`mensagem ${financeiro ? 'erro' : 'sucesso'}`}>{mensagem}</p>}
       <div hidden={aba !== 'turno'} className="pilha">

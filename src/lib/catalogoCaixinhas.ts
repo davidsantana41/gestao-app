@@ -8,6 +8,7 @@ type Evidencia =
   | { fonte: 'configuracao'; indice: number; nome: string; valor?: number }
   | { fonte: 'rateio' | 'reserva-fixa'; lancamentoId: string; data: string; valor: number }
   | { fonte: 'reserva-diaria'; lancamentoId: string; data: string; indice: number; nome: string; valor: number }
+  | { fonte: 'transferencia-interna'; lancamentoId: string; data: string; nome: string; nomeContraparte: string; origem: string; destino: string; valor: number }
   | { fonte: 'retirada'; lancamentoId: string; data: string; indice: number; retiradaId: string; origem: string; nome: string; valor: number };
 
 type CaixinhaProjetada = Readonly<{
@@ -33,6 +34,12 @@ const reservasFixas = [
 ] as const satisfies readonly [ReservaFixa, keyof DadosPersistidos, keyof Lancamento][];
 
 const chave = (familia: Familia, id: string): IdCaixinha => `${familia}:${id}`;
+function pontaCaixinha(valor: string) {
+  const [familia, idOriginal, ...resto] = valor.split(':');
+  if (resto.length || !['diaria', 'fixo', 'reserva-fixa'].includes(familia) || !temId(idOriginal)
+      || (familia === 'reserva-fixa' && !['reserva1', 'reserva2', 'reserva3'].includes(idOriginal))) return null;
+  return { familia: familia as Familia, idOriginal };
+}
 export const chaveMovimentoConciliavel = (lancamentoId: string, fonte: 'retirada' | 'reserva-diaria', indice: number) =>
   `${lancamentoId}\u0000${fonte}\u0000${indice}`;
 const temId = (id: unknown): id is string => typeof id === 'string' && id.trim().length > 0;
@@ -122,6 +129,22 @@ export function projetarCatalogoCaixinhas(dados: DadosPersistidos): Readonly<{
     h.reservasDiariasDia?.forEach((r, indice) => registrar('diaria', r.id, {
       ...origem, fonte: 'reserva-diaria', indice, nome: r.nome, valor: r.valor,
     }));
+    if (h.tipo === 'transferencia-interna' && h.transferenciaInterna) {
+      const transferencia = h.transferenciaInterna;
+      for (const lado of ['origem', 'destino'] as const) {
+        const ponta = transferencia[lado];
+        if (ponta === 'principal') continue;
+        const identidade = pontaCaixinha(ponta);
+        if (!identidade) continue;
+        registrar(identidade.familia, identidade.idOriginal, {
+          ...origem, fonte: 'transferencia-interna', data: h.data,
+          nome: transferencia.descricao || 'Transferência interna',
+          nomeContraparte: lado === 'origem' ? transferencia.nomeDestino : transferencia.nomeOrigem,
+          origem: transferencia.origem, destino: transferencia.destino,
+          valor: (lado === 'origem' ? -1 : 1) * transferencia.valor,
+        });
+      }
+    }
     for (const [id, , campo] of reservasFixas) {
       if (h[campo] !== undefined) {
         registrar('reserva-fixa', id, { ...origem, fonte: 'reserva-fixa', valor: h[campo] });

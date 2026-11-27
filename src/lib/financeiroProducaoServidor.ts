@@ -10,7 +10,7 @@ import { FieldValue, getFirestore, type Firestore, type Transaction } from 'fire
 import { uuidFinanceiro } from './comandoFinanceiro';
 import { confirmarComando, ErroServico, type TransacaoFinanceira } from './executorFinanceiroServidor';
 import { lerDados } from './gestao';
-import { acaoDeCaixinha, confirmarCaixinha, consultarCaixinhas, validarSaldosConciliados, type TransacaoCatalogo } from './gestaoCaixinhasServidor';
+import { acaoDeCaixinha, confirmarCaixinha, consultarCaixinhas, validarSaldoOrigemTransferencia, validarSaldosConciliados, type TransacaoCatalogo } from './gestaoCaixinhasServidor';
 import { criarAutenticadorFirebase } from './identidadeFinanceiraServidor';
 
 const projeto = 'appcar-a0886';
@@ -193,6 +193,7 @@ export async function gravarFinanceiroReal(authorization: string | undefined, co
     if (acaoDeCaixinha(tipo)) return confirmarCaixinha(adaptador, uid, espaco, caminho, entrada);
     return confirmarComando(adaptador, uid, espacoId, caminho, entrada, {
       atualizarCampos: true, criarCusto: true, criarReservaDiaria: true,
+      validarSaldoOrigemTransferencia: (antes, id, valor) => validarSaldoOrigemTransferencia(adaptador, espaco, antes, id, valor),
       validarSaldos: (antes, depois, ids) => validarSaldosConciliados(adaptador, espaco, antes, depois, ids),
     });
   });

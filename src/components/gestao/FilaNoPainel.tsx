@@ -10,6 +10,7 @@ const acoes = new Map<unknown, string>([
   ['entrada', 'Entrada'],
   ['retirada', 'Retirada'],
   ['deposito-caixinha', 'Depósito em caixinha'],
+  ['transferencia-interna', 'Transferência interna'],
   ['estornar', 'Estorno de lançamento'],
   ['preferencias', 'Preferências do painel'],
   ['excluir', 'Exclusão de lançamento'],
@@ -65,12 +66,12 @@ export default function FilaNoPainel({ financeiro }: { financeiro: ReturnType<ty
       {financeiro.itens.length === 0 && <p className="ajuda">A fila está vazia.</p>}
       <span className="somente-leitor" role="status">{ultimo && rotulos[ultimo.estado]}</span>
       {financeiro.itens.slice().reverse().map(({ estado, comando, recibo, motivo }) => {
-        const { tipo, descricao, data, valorCentavos, faturamentoCentavos, lancamentoId, nome, caixinhaId } = comando.alteracao;
+        const { tipo, descricao, data, valorCentavos, faturamentoCentavos, lancamentoId, nome, caixinhaId, nomeOrigem, nomeDestino } = comando.alteracao;
         const valor = valorCentavos ?? faturamentoCentavos;
         const acao = tipo === 'turno' ? (lancamentoId ? 'Edição de turno' : 'Novo turno') : acoes.get(tipo) ?? 'Operação financeira';
         return <article className="custo-item" key={comando.operacaoId} data-estado-fila={estado}>
           <strong>{acao} · {rotulos[estado]}</strong>
-          <p>{[descricao ?? nome ?? caixinhaId, data, typeof valor === 'number' ? moeda(valor / 100) : undefined].filter(v => typeof v === 'string').join(' · ')}</p>
+          <p>{[tipo === 'transferencia-interna' ? `${nomeOrigem} → ${nomeDestino}` : descricao ?? nome ?? caixinhaId, data, typeof valor === 'number' ? moeda(valor / 100) : undefined].filter(v => typeof v === 'string').join(' · ')}</p>
           <p className="ajuda">Operação {comando.operacaoId} · Base {comando.revisao}
             {recibo && ` · Recibo na revisão ${recibo.revisao}${recibo.repetida ? ' (recuperado)' : ''}`}</p>
           {motivo && <p>{motivo}</p>}

@@ -4,7 +4,7 @@ import { moeda, type DadosPersistidos, type ReservaDiariaItem, type CustoFixoIte
 
 export type EventoAuditoriaCaixinha = {
   id: string;
-  acao: 'criar' | 'renomear' | 'arquivar' | 'reativar' | 'excluir' | 'conciliar' | 'depositar' | 'retirar' | 'estornar' | 'corrigir';
+  acao: 'criar' | 'renomear' | 'arquivar' | 'reativar' | 'excluir' | 'conciliar' | 'depositar' | 'retirar' | 'transferir' | 'estornar' | 'corrigir';
   caixinhaId: IdCaixinha;
   autorUid: string;
   confirmadoEm: string;
@@ -13,6 +13,11 @@ export type EventoAuditoriaCaixinha = {
   nomeAnterior?: string;
   nomeNovo?: string;
   finalidade?: string;
+  origem?: string;
+  destino?: string;
+  nomeOrigem?: string;
+  nomeDestino?: string;
+  valor?: number;
   saldoVerificado?: number | null;
   vinculo?: {
     referenciaSha256: string;
@@ -40,7 +45,7 @@ export type VinculoRegistrado = {
 
 export type MovimentoCaixinha = {
   id: string;
-  tipo: 'provisao-diaria' | 'rateio-fixo' | 'reserva-fixa' | 'retirada' | 'conciliacao';
+  tipo: 'provisao-diaria' | 'rateio-fixo' | 'reserva-fixa' | 'retirada' | 'transferencia-interna' | 'conciliacao';
   lancamentoId?: string;
   data: string;
   descricao: string;
@@ -125,6 +130,7 @@ const rotulosFontes: Record<string, string> = {
   'reserva-fixa': 'Reserva fixa',
   'reserva-diaria': 'Reserva diária',
   retirada: 'Retirada',
+  'transferencia-interna': 'Transferência interna',
 };
 
 export function obterVinculosEspaco(dados: DadosPersistidos): VinculoRegistrado[] {
@@ -346,6 +352,15 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
           data: e.data,
           descricao: e.nome ? `Retirada: ${e.nome}` : 'Retirada de caixinha',
           valor: -e.valor,
+        });
+      } else if (e.fonte === 'transferencia-interna') {
+        movimentos.push({
+          id: `${e.lancamentoId}-transferencia-${idOriginal}`,
+          tipo: 'transferencia-interna',
+          lancamentoId: e.lancamentoId,
+          data: e.data,
+          descricao: `${e.valor < 0 ? 'Transferência para' : 'Transferência de'} ${e.nomeContraparte}`,
+          valor: e.valor,
         });
       }
     }

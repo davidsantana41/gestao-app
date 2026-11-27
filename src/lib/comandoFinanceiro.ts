@@ -1,4 +1,4 @@
-import { criarTurno, dataBR, datasTrabalhoNoMes, resumir, type DadosPersistidos, type Lancamento } from './gestao.ts';
+import { criarTurno, dataBR, datasTrabalhoNoMes, resultado, resumir, type DadosPersistidos, type Lancamento, type PontaTransferencia } from './gestao.ts';
 import { arredondarRazaoEmCentavos, centavosParaReais, distribuirCentavos, reaisParaCentavos, somarCentavos, somarHistoricoEmCentavos } from './centavosFinanceiros.ts';
 
 export const uuidFinanceiro = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -23,6 +23,14 @@ function id(valor: unknown) {
   if (valor !== chave || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(chave)
       || chave === 'constructor' || chave === 'prototype') invalido('identificador');
   return chave;
+}
+function pontaTransferencia(valor: unknown, campo: string): PontaTransferencia {
+  const ponta = texto(valor, campo, 140);
+  if (ponta === 'principal') return ponta;
+  const [familia, original, ...resto] = ponta.split(':');
+  if (resto.length || !['diaria', 'fixo', 'reserva-fixa'].includes(familia)
+      || (familia === 'reserva-fixa' && !['reserva1', 'reserva2', 'reserva3'].includes(original))) invalido(campo);
+  return `${familia}:${id(original)}` as PontaTransferencia;
 }
 function inteiro(valor: unknown, campo: string, max = maxCentavos) {
   if (typeof valor !== 'number' || !Number.isSafeInteger(valor) || valor < 0 || valor > max) invalido(campo);
@@ -96,6 +104,18 @@ export function lerComandoFinanceiro(valor: unknown) {
       return { ...base, tipo: 'deposito-caixinha' as const, caixinhaId: chave,
         familia, idOriginal: id(idOriginal), data: dataISO(c.data),
         descricao: texto(c.descricao, 'descrição', 300), valor: centavosParaReais(valor) };
+    }
+    case 'transferencia-interna': {
+      const c = objeto(entrada, ['tipo', 'data', 'origem', 'destino', 'nomeOrigem', 'nomeDestino', 'valorCentavos', 'descricao']);
+      const origem = pontaTransferencia(c.origem, 'origem');
+      const destino = pontaTransferencia(c.destino, 'destino');
+      if (origem === destino || (origem === 'principal' && destino === 'principal')) invalido('destino da transferência');
+      const valor = inteiro(c.valorCentavos, 'valor');
+      if (!valor) invalido('valor');
+      return { ...base, tipo: 'transferencia-interna' as const, data: dataISO(c.data), origem, destino,
+        nomeOrigem: texto(c.nomeOrigem, 'nome da origem'), nomeDestino: texto(c.nomeDestino, 'nome do destino'),
+        valor: centavosParaReais(valor), descricao: typeof c.descricao === 'string'
+          ? c.descricao.length <= 300 ? c.descricao.trim() : invalido('descrição') : '' };
     }
     case 'excluir': {
       const c = objeto(entrada, ['tipo', 'lancamentoId']);
@@ -204,6 +224,24 @@ export function montarFinanceiro(dados: DadosPersistidos, comando: ComandoFinanc
     }
     return { ...dados, historico: [item, ...dados.historico],
       reservasDiarias };
+  }
+  if (comando.tipo === 'transferencia-interna') {
+    const valorCentavos = reaisParaCentavos(comando.valor);
+    if (comando.origem === 'principal') {
+      const saldoPrincipal = somarHistoricoEmCentavos(dados.historico
+        .filter(h => !h.estornadoPor).map(h => reaisParaCentavos(resultado(h).liquido)));
+      if (saldoPrincipal < valorCentavos) throw new Error('Saldo principal insuficiente para esta transferência.');
+    }
+    const item: Lancamento = {
+      id: comando.operacaoId, tipo: 'transferencia-interna', data: dataBR(comando.data),
+      diaSemana: new Date(comando.data + 'T12:00:00Z').toLocaleDateString('pt-BR', { weekday: 'long', timeZone: 'UTC' }),
+      descricao: comando.descricao || 'Transferência interna', faturamentoBruto: 0, combustivel: 0, litros: 0,
+      kmTrabalhado: 0, kmTotal: 0, reservaFevereiro: 0, reservaInvestimento: 0, reservaAcidente: 0,
+      custosFixosDia: 0, detalheCustosFixosDia: {}, reservasDiariasDia: [], saidas: [], totalDespesas: 0, liquido: 0,
+      transferenciaInterna: { origem: comando.origem, destino: comando.destino,
+        nomeOrigem: comando.nomeOrigem, nomeDestino: comando.nomeDestino, valor: comando.valor, descricao: comando.descricao },
+    };
+    return { ...dados, historico: [item, ...dados.historico] };
   }
   if (comando.tipo === 'deposito-caixinha') {
     const { valor, descricao, data, operacaoId, familia, idOriginal } = comando;

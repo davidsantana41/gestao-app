@@ -56,8 +56,8 @@ export function saldoVerificavelEmCentavos(dados: DadosPersistidos, id: IdCaixin
   const caixinha = projecao.caixinhas.find(c => c.id === id);
   return somarCentavos((caixinha?.evidencias ?? []).flatMap(e => {
     if (e.fonte === 'configuracao') return [];
-    const valor = reaisParaCentavos(e.valor);
+    const valor = reaisParaCentavos(e.fonte === 'transferencia-interna' ? Math.abs(e.valor) : e.valor);
     if (valor < 0) throw new Error('Valor histórico negativo. Conciliação necessária.');
-    return [e.fonte === 'retirada' ? -valor : valor];
+    return [e.fonte === 'retirada' ? -valor : e.fonte === 'transferencia-interna' ? Math.sign(e.valor) * valor : valor];
   }));
 }

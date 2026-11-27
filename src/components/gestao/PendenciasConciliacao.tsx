@@ -15,6 +15,7 @@ const fontes = {
   'reserva-fixa': 'Reserva fixa',
   'reserva-diaria': 'Reserva diária',
   retirada: 'Retirada',
+  'transferencia-interna': 'Transferência interna',
 };
 
 export default function PendenciasConciliacao({ dados }: { dados: DadosPersistidos }) {
