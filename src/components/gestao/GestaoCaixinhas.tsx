@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { dataLocal, moeda, numero, resumir, type DadosPersistidos } from '@/lib/gestao';
 import { centavosParaReais, reaisParaCentavos } from '@/lib/centavosFinanceiros';
 import {
@@ -23,6 +23,24 @@ export type GestaoCaixinhasProps = {
 };
 
 type AbaCaixinhas = 'ativas' | 'arquivadas' | 'conciliacao' | 'auditoria';
+
+function mensagemTransferenciaSegura(erro: unknown) {
+  const mensagem = erro instanceof Error ? erro.message : '';
+  const mensagensPermitidas = [
+    'Sem conexão.', 'A confirmação de uma operação anterior está pendente.',
+    'Não foi possível confirmar a resposta do servidor.', 'Autentique a conta para registrar a operação.',
+    'O recibo do servidor não corresponde à operação.', 'Saldo principal insuficiente para esta transferência.',
+    'O valor excede o saldo disponível da caixinha de origem.', 'O saldo da caixinha de origem está em revisão.',
+    'Movimentação em caixinha arquivada.', 'Identidade da caixinha indisponível.',
+    'O espaço está em preparação.', 'Envios suspensos neste espaço.',
+    'Operação não autorizada neste espaço.', 'Geração financeira divergente.',
+    'Revisão financeira divergente.', 'A alteração afeta referências ambíguas.',
+    'Outra operação está sendo confirmada.',
+  ];
+  return mensagensPermitidas.some(prefixo => mensagem.startsWith(prefixo)) && mensagem.length <= 320
+    ? mensagem
+    : 'Não foi possível confirmar agora. Seus dados foram preservados; atualize o financeiro e confira o histórico antes de tentar novamente.';
+}
 
 const rotulosMovimento: Record<CaixinhaCompleta['movimentos'][number]['tipo'], string> = {
   'provisao-diaria': 'Provisão diária',
@@ -106,8 +124,8 @@ export default function GestaoCaixinhas({
     );
   }, [aba, caixinhasAtivas, caixinhasDesativadas, filtroTexto]);
 
-  const aplicarAlteracao = async (comandoPayload: Record<string, unknown>) => {
-    if (!onComando || !dialogo) return;
+  const aplicarAlteracao = async (comandoPayload: Record<string, unknown>, retornoNoModal = false): Promise<{ ok: boolean; mensagem?: string }> => {
+    if (!onComando || !dialogo) return { ok: false, mensagem: 'Não foi possível iniciar a transferência.' };
     setFeedback(null);
     setOcupado(true);
     try {
@@ -115,30 +133,36 @@ export default function GestaoCaixinhas({
           ? comandoPayload.origem === 'principal' ? 'deposito-caixinha' : 'retirada'
           : String(comandoPayload.tipo);
         if (bloquearEnvio || !podeAcao(acao)) {
-          setFeedback({ tipo: 'erro', texto: 'A operação está indisponível no momento. Confira o estado da fila.' });
-          return;
+          const mensagem = 'A operação está indisponível no momento. Atualize os dados e tente novamente.';
+          if (!retornoNoModal) setFeedback({ tipo: 'erro', texto: mensagem });
+          return { ok: false, mensagem };
         }
         if (dialogo.base._sync?.generation !== dados._sync?.generation || dialogo.base._sync?.revision !== dados._sync?.revision) {
-          setFeedback({ tipo: 'erro', texto: 'Os dados mudaram. Feche a revisão e abra a operação novamente.' });
-          return;
+          const mensagem = 'Os dados financeiros mudaram. Atualize o painel e revise a transferência antes de tentar novamente.';
+          if (!retornoNoModal) setFeedback({ tipo: 'erro', texto: mensagem });
+          return { ok: false, mensagem };
         }
         const resultado = await onComando(comandoPayload, dialogo.base);
         if (resultado) {
           if (comandoPayload.tipo === 'caixinha-arquivar') setAba('arquivadas');
           if (comandoPayload.tipo === 'caixinha-reativar') setAba('ativas');
           setMenuAberto(null);
-          setFeedback({ tipo: 'sucesso', texto: resultado === 'confirmada'
-            ? 'Operação confirmada pelo serviço financeiro.'
-            : 'Operação adicionada à fila. Acompanhe a confirmação no painel.' });
+          setFeedback({ tipo: 'sucesso', texto: comandoPayload.tipo === 'transferencia-interna'
+            ? 'Transferência realizada com sucesso'
+            : resultado === 'confirmada' ? 'Operação confirmada pelo serviço financeiro.'
+              : 'Operação adicionada à fila. Acompanhe a confirmação no painel.' });
           setModal(null);
+          return { ok: true };
         } else {
-          setFeedback({ tipo: 'erro', texto: 'Não foi possível confirmar a operação no servidor.' });
+          const mensagem = 'Não foi possível confirmar agora. Seus dados foram preservados; atualize o painel antes de tentar novamente.';
+          if (!retornoNoModal) setFeedback({ tipo: 'erro', texto: mensagem });
+          return { ok: false, mensagem };
         }
     } catch (erro) {
-      setFeedback({
-        tipo: 'erro',
-        texto: erro instanceof Error ? erro.message : 'Erro ao processar operação.',
-      });
+      const mensagem = retornoNoModal ? mensagemTransferenciaSegura(erro)
+        : erro instanceof Error && erro.message.length < 320 ? erro.message : 'Erro ao processar operação.';
+      if (!retornoNoModal) setFeedback({ tipo: 'erro', texto: mensagem });
+      return { ok: false, mensagem };
     } finally {
       setOcupado(false);
     }
@@ -568,7 +592,7 @@ export default function GestaoCaixinhas({
           saldoReservadoCentavos={saldoConfirmado ? relatorio.totalSaldoCentavos : null}
           ocupado={ocupado || bloquearEnvio}
           onCancelar={() => setModal(null)}
-          onConfirmar={transferencia => void aplicarAlteracao({ tipo: 'transferencia-interna', ...transferencia })}
+          onConfirmar={transferencia => aplicarAlteracao({ tipo: 'transferencia-interna', ...transferencia }, true)}
         />
       )}
 
@@ -633,12 +657,14 @@ function ModalTransferencia({ modo, caixinha, caixinhas, saldoPrincipalCentavos,
   onCancelar, onConfirmar }: {
   modo: 'reservar' | 'transferir'; caixinha: CaixinhaCompleta; caixinhas: CaixinhaCompleta[];
   saldoPrincipalCentavos: number; saldoReservadoCentavos: number | null; ocupado: boolean;
-  onCancelar: () => void; onConfirmar: (alteracao: Record<string, unknown>) => void;
+  onCancelar: () => void; onConfirmar: (alteracao: Record<string, unknown>) => Promise<{ ok: boolean; mensagem?: string }>;
 }) {
   const [destino, setDestino] = useState<string>(modo === 'reservar' ? caixinha.id : 'principal');
   const [valor, setValor] = useState('');
   const [descricao, setDescricao] = useState('');
   const [erro, setErro] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const envioEmCurso = useRef(false);
   type DestinoTransferencia = { id: string; nome: string; estado?: string; saldoAtestado?: boolean; saldoCentavos?: number };
   const principal: DestinoTransferencia = { id: 'principal', nome: 'Saldo principal' };
   const origem = modo === 'reservar' ? principal : caixinha;
@@ -667,8 +693,9 @@ function ModalTransferencia({ modo, caixinha, caixinhas, saldoPrincipalCentavos,
     ? destinoSaldoCentavos + (valorCentavos ?? 0) : null;
   const ativosDestino = caixinhas.filter(c => c.estado === 'ativa' && c.editavel !== false && c.id !== origemId);
 
-  const submit = (evento: React.FormEvent) => {
+  const submit = async (evento: React.FormEvent) => {
     evento.preventDefault();
+    if (envioEmCurso.current || ocupado) return;
     setErro('');
     if (origemSaldoCentavos === null || (origemId !== 'principal' && !caixinha.saldoAtestado)) {
       setErro('O saldo da origem está em revisão. Resolva as pendências antes de transferir.'); return;
@@ -679,8 +706,18 @@ function ModalTransferencia({ modo, caixinha, caixinhas, saldoPrincipalCentavos,
     if (destinoId !== 'principal' && (destinoSelecionado.estado !== 'ativa' || !destinoSelecionado.saldoAtestado)) {
       setErro('O destino está desativado ou com saldo em revisão. Escolha outro destino.'); return;
     }
-    onConfirmar({ data: dataLocal(), origem: origemId, destino: destinoId,
-      nomeOrigem: origem.nome, nomeDestino: destinoSelecionado.nome, valorCentavos, descricao: descricao.trim() });
+    envioEmCurso.current = true;
+    setEnviando(true);
+    try {
+      const resultado = await onConfirmar({ data: dataLocal(), origem: origemId, destino: destinoId,
+        nomeOrigem: origem.nome, nomeDestino: destinoSelecionado.nome, valorCentavos, descricao: descricao.trim() });
+      if (!resultado.ok) setErro(resultado.mensagem || 'Não foi possível confirmar. Confira os saldos e tente novamente.');
+    } catch {
+      setErro('Não foi possível confirmar agora. A tentativa foi preservada; atualize os dados antes de reenviar.');
+    } finally {
+      envioEmCurso.current = false;
+      setEnviando(false);
+    }
   };
 
   return <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="modal-transferencia-titulo">
@@ -715,9 +752,9 @@ function ModalTransferencia({ modo, caixinha, caixinhas, saldoPrincipalCentavos,
       </section>
       {erro && <p role="alert" className="mensagem erro">{erro}</p>}
       <div className="acoes">
-        <button type="button" className="botao secundario" onClick={onCancelar} disabled={ocupado}>Cancelar</button>
-        <button type="submit" className="botao primario" disabled={ocupado || !validaValor || !destinoSelecionado || destinoId === origemId}>
-          Confirmar transferência
+        <button type="button" className="botao secundario" onClick={onCancelar} disabled={ocupado || enviando}>Cancelar</button>
+        <button type="submit" className="botao primario" disabled={ocupado || enviando || !validaValor || !destinoSelecionado || destinoId === origemId}>
+          {enviando ? 'Transferindo…' : 'Confirmar transferência'}
         </button>
       </div>
     </form>

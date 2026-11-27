@@ -90,3 +90,18 @@ test('bloqueia transferência acima do saldo da origem sem gravar qualquer docum
   await assert.rejects(salvar(db, entrada(op1, 1, `diaria:${idA}`, 'principal', 2501)), /excede o saldo disponível/);
   assert.deepEqual([...db.documentos.entries()], estadoAntes);
 });
+
+test('permite receber de uma caixinha quando o saldo principal está negativo', async () => {
+  const db = banco();
+  const anterior = db.documentos.get(financeiro);
+  anterior.historico.find(item => item.id === 'entrada-legada').faturamentoBruto = 20;
+  anterior.historico.find(item => item.id === 'entrada-legada').liquido = 20;
+  assert.equal(resumir(anterior.historico).liquido, -5);
+
+  const recibo = await salvar(db, entrada(op2, 1, `diaria:${idA}`, 'principal', 800));
+  assert.equal(recibo.repetida, false);
+  const dados = db.documentos.get(financeiro);
+  assert.equal(resumir(dados.historico).liquido, 3);
+  assert.equal(dados.historico.find(item => item.id === 'reserva-legada').reservasDiariasDia[0].valor, 25);
+  assert.equal(dados.historico[0].tipo, 'transferencia-interna');
+});

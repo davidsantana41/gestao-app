@@ -90,12 +90,16 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
     try { await consultar(); } catch (falha) { setErro((falha as Error).message); }
   }
 
-  async function exclusivo<T>(acao: () => Promise<T>) {
-    if (operando.current) return;
+  async function exclusivo<T>(acao: () => Promise<T>, propagarFalha = false) {
+    if (operando.current) {
+      if (propagarFalha) throw new Error('Outra operação está sendo confirmada. Aguarde e confira os dados antes de tentar novamente.');
+      return;
+    }
     operando.current = true;
     setOcupado(true);
     setErro('');
     try { return await acao(); } catch (falha) {
+      if (propagarFalha) throw falha;
       setErro(falha instanceof Error ? falha.message : 'Operação indisponível.');
     } finally {
       operando.current = false;
@@ -219,7 +223,7 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
         try { await consultar(); }
         catch { setErro('A operação foi confirmada, mas a atualização da tela falhou. Use Atualizar dados confirmados.'); }
         return true;
-      });
+      }, true);
       return enviado === true;
     }
     if (!ativa) return false;
