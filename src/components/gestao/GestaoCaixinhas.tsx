@@ -99,7 +99,6 @@ export default function GestaoCaixinhas({
     return lista.filter(
       c =>
         c.nome.toLowerCase().includes(termo) ||
-        c.id.toLowerCase().includes(termo) ||
         c.finalidade.toLowerCase().includes(termo),
     );
   }, [aba, caixinhasAtivas, caixinhasDesativadas, filtroTexto]);
@@ -264,7 +263,7 @@ export default function GestaoCaixinhas({
             <input
               id={filtroId}
               type="search"
-              placeholder="Buscar por nome, ID ou finalidade…"
+              placeholder="Buscar por nome ou finalidade…"
               value={filtroTexto}
               onChange={e => setFiltroTexto(e.target.value)}
               className="campo-busca-caixinhas"
@@ -772,11 +771,6 @@ function ModalVisualizarCaixinha({
           )}
         </div>
 
-        <details className="informacoes-tecnicas-caixinha">
-          <summary>Informações técnicas</summary>
-          <p><span>Identificador permanente</span><code>{caixinha.id}</code></p>
-        </details>
-
         {/* Abas Internas */}
         <div className="abas-caixinhas">
           <button
@@ -907,9 +901,7 @@ function ModalEditarCaixinha({
     <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="modal-editar-titulo">
       <div className="modal-conteudo painel">
         <h3 id="modal-editar-titulo">Editar caixinha</h3>
-        <p className="ajuda">
-          ID permanente: <code>{caixinha.id}</code>. Os lançamentos históricos preservam os nomes registrados na época.
-        </p>
+        <p className="ajuda">Os lançamentos históricos preservam os nomes registrados na época.</p>
 
         <form onSubmit={submit} className="pilha compacta">
           <label className="campo">
@@ -996,7 +988,7 @@ function ModalArquivarCaixinha({
       <div className="modal-conteudo painel">
         <h3 id="modal-arquivar-titulo">Desativar caixinha: {caixinha.nome}</h3>
         <p className="ajuda">
-          ID permanente: <code>{caixinha.id}</code> · Saldo atual: <strong>{moeda(caixinha.saldo)}</strong>
+          Saldo atual: <strong>{moeda(caixinha.saldo)}</strong>
         </p>
 
         {bloqueio ? (
@@ -1083,9 +1075,6 @@ function ModalReativarCaixinha({
     <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="modal-reativar-titulo">
       <div className="modal-conteudo painel">
         <h3 id="modal-reativar-titulo">Reativar caixinha: {caixinha.nome}</h3>
-        <p className="ajuda">
-          ID permanente: <code>{caixinha.id}</code>
-        </p>
 
         <form onSubmit={submit} className="pilha compacta">
           <p>
@@ -1144,9 +1133,6 @@ function ModalExcluirCaixinha({
     <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="modal-excluir-titulo">
       <div className="modal-conteudo painel">
         <h3 id="modal-excluir-titulo">Excluir caixinha: {caixinha.nome}</h3>
-        <p className="ajuda">
-          ID permanente: <code>{caixinha.id}</code>
-        </p>
 
         {bloqueio ? (
           <div className="pilha compacta">

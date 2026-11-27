@@ -33,6 +33,8 @@ const reservasFixas = [
 ] as const satisfies readonly [ReservaFixa, keyof DadosPersistidos, keyof Lancamento][];
 
 const chave = (familia: Familia, id: string): IdCaixinha => `${familia}:${id}`;
+export const chaveMovimentoConciliavel = (lancamentoId: string, fonte: 'retirada' | 'reserva-diaria', indice: number) =>
+  `${lancamentoId}\u0000${fonte}\u0000${indice}`;
 const temId = (id: unknown): id is string => typeof id === 'string' && id.trim().length > 0;
 
 function idsDuplicados(itens: readonly { id?: unknown }[]) {

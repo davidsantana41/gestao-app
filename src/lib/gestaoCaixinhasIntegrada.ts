@@ -1,4 +1,4 @@
-import { projetarCatalogoCaixinhas, revisarPendenciasCaixinhas, type IdCaixinha } from './catalogoCaixinhas.ts';
+import { chaveMovimentoConciliavel, projetarCatalogoCaixinhas, revisarPendenciasCaixinhas, type IdCaixinha } from './catalogoCaixinhas.ts';
 import { centavosParaReais, somarHistoricoEmCentavos } from './centavosFinanceiros.ts';
 import { moeda, type DadosPersistidos, type ReservaDiariaItem, type CustoFixoItem } from './gestao.ts';
 
@@ -27,6 +27,7 @@ export type VinculoRegistrado = {
   id: string;
   caixinhaId: IdCaixinha;
   lancamentoId?: string;
+  indice?: number;
   fonte: string;
   valor: number;
   descricao?: string;
@@ -84,8 +85,10 @@ export type PendenciaRevisao = {
   data?: string;
   valor: number;
   descricao: string;
+  referencia?: string;
   referenciaOriginal?: string;
   lancamentoId?: string;
+  indice?: number;
   retiradaId?: string;
   candidatos: { id: IdCaixinha; nome: string; criterio: string }[];
   evidenciaRaw: unknown;
@@ -168,6 +171,10 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
   const vinculos = servidor?.vinculos ?? obterVinculosEspaco(dados);
   const vinculosPorCaixinha = new Map<IdCaixinha, VinculoRegistrado[]>();
   const chavesVinculadas = new Set<string>();
+  const movimentosConciliados = new Set(vinculos.flatMap(v =>
+    v.lancamentoId && v.indice !== undefined && (v.fonte === 'retirada' || v.fonte === 'reserva-diaria')
+      ? [chaveMovimentoConciliavel(v.lancamentoId, v.fonte, v.indice)] : [],
+  ));
 
   for (const v of vinculos) {
     chavesVinculadas.add(v.id);
@@ -202,6 +209,7 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
       descricao: ('nome' in e ? e.nome : undefined) || 'Movimentação sem descrição',
       referenciaOriginal: p.referenciaOriginal || p.referencia,
       lancamentoId: 'lancamentoId' in e ? e.lancamentoId : undefined,
+      indice: 'indice' in e ? e.indice : undefined,
       retiradaId: e.fonte === 'retirada' ? e.retiradaId : undefined,
       candidatos,
       evidenciaRaw: e,
@@ -211,6 +219,7 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
 
   const idsComPendencias = new Set<IdCaixinha>();
   for (const p of pendenciasAtivas) {
+    if (p.referencia) idsComPendencias.add(p.referencia as IdCaixinha);
     for (const c of p.candidatos) idsComPendencias.add(c.id);
   }
 
@@ -297,6 +306,8 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
 
     for (let idx = 0; idx < evidencias.length; idx++) {
       const e = evidencias[idx];
+      if ((e.fonte === 'retirada' || e.fonte === 'reserva-diaria')
+          && movimentosConciliados.has(chaveMovimentoConciliavel(e.lancamentoId, e.fonte, e.indice))) continue;
       if (e.fonte === 'configuracao') continue;
       if (e.fonte === 'reserva-diaria') {
         movimentos.push({
@@ -369,7 +380,10 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
     try {
       creditosCentavos = somarHistoricoEmCentavos(movimentos.filter(m => m.valor >= 0).map(m => m.valor));
       debitosCentavos = somarHistoricoEmCentavos(movimentos.filter(m => m.valor < 0).map(m => -m.valor));
-      saldoCentavos = creditosCentavos - debitosCentavos;
+      // O saldo é a soma líquida das movimentações, arredondada uma única vez.
+      // Arredondar entradas e retiradas separadamente divergia do servidor em
+      // registros legados com frações de centavo.
+      saldoCentavos = somarHistoricoEmCentavos(movimentos.map(m => m.valor));
     } catch {
       saldoAtestado = false;
       motivoSaldoNaoAtestado = 'Valores ou referências inconsistentes no histórico. Saldo não atestado.';
@@ -407,7 +421,15 @@ export function obterTodasCaixinhas(dados: DadosPersistidos, servidor?: {
     let podeExcluir = false;
     let motivoBloqueioExclusao: string | undefined;
 
-    if (movimentos.length > 0) {
+    if (!saldoAtestado) {
+      podeExcluir = false;
+      motivoBloqueioExclusao = 'Revise as referências pendentes desta caixinha antes de excluí-la.';
+    } else if (saldoCentavos !== 0) {
+      podeExcluir = false;
+      motivoBloqueioExclusao = saldoCentavos > 0
+        ? `A caixinha possui saldo positivo de ${moeda(saldo)}. Registre uma movimentação válida antes de excluí-la.`
+        : `A caixinha possui saldo negativo de ${moeda(saldo)}. Regularize o saldo antes de excluí-la.`;
+    } else if (movimentos.length > 0) {
       podeExcluir = false;
       motivoBloqueioExclusao = 'A caixinha possui movimentações registradas no histórico. Para preservar a integridade contábil e a auditoria, não é permitida a exclusão física; utilize a opção Arquivar.';
     } else if (familia !== 'diaria') {
@@ -780,6 +802,7 @@ export function executarConciliarCaixinha(
     id: params.pendencia.id,
     caixinhaId: params.caixinhaId,
     lancamentoId: params.pendencia.lancamentoId,
+    indice: params.pendencia.indice,
     fonte: params.pendencia.fonte,
     valor: params.pendencia.valor,
     descricao: params.pendencia.descricao,

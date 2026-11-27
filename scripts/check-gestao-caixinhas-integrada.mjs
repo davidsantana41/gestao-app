@@ -11,6 +11,7 @@ import {
   executarExcluirCaixinha,
   executarConciliarCaixinha,
 } from '../src/lib/gestaoCaixinhasIntegrada.ts';
+import { saldoComVinculos } from '../src/lib/gestaoCaixinhasServidor.ts';
 
 const turno = (id, campos) => ({
   id, data: '15/11/2026', diaSemana: 'domingo', tipo: 'turno',
@@ -166,6 +167,23 @@ test('regras de arquivamento: bloqueia saldo != 0 e permite quando saldo == 0', 
   assert.equal(caixaReativada.estado, 'ativa');
 });
 
+test('saldo do card e do bloqueio usa o mesmo arredondamento líquido para históricos fracionários', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const dados = {
+    ...dadosPadrao(),
+    reservasDiarias: [{ id, nome: 'Reserva legada', valor: 0 }],
+    historico: [
+      turno('credito-fracionario', { reservasDiariasDia: [{ id, nome: 'Reserva legada', valor: 0.005 }] }),
+      turno('retirada-fracionaria', { saidas: [{ id: 'saida-fracionaria', origem: `diaria:${id}`, nome: 'Ajuste legado', valor: 0.004 }] }),
+    ],
+  };
+  const caixa = obterTodasCaixinhas(dados).caixinhas.find(item => item.id === `diaria:${id}`);
+  assert.equal(caixa.saldo, 0);
+  assert.equal(caixa.saldoCentavos, 0);
+  assert.equal(caixa.podeArquivar, true);
+  assert.equal(caixa.podeExcluir, false, 'Histórico continua preservado, mesmo com saldo zero');
+});
+
 test('regras de exclusão: bloqueia exclusão quando há histórico e permite quando não há', () => {
   let dados = dadosPadrao();
   dados = executarCriarCaixinha(dados, { nome: 'Caixinha Com Histórico', finalidade: 'Teste', autorUid: 'user-1' });
@@ -188,11 +206,19 @@ test('regras de exclusão: bloqueia exclusão quando há histórico e permite qu
   const checadaSemHist = caixasChecadas.find(c => c.id === semHistorico.id);
 
   assert.equal(checadaComHist.podeExcluir, false);
-  assert.match(checadaComHist.motivoBloqueioExclusao, /histórico/);
+  assert.match(checadaComHist.motivoBloqueioExclusao, /saldo positivo/);
   assert.throws(() => {
     executarExcluirCaixinha(dados, { id: comHistorico.id, autorUid: 'user-1' });
-  }, /histórico/);
+  }, /saldo positivo/);
 
+  dados = {
+    ...dados,
+    historico: [...dados.historico, turno('t2', { saidas: [{ id: 's1', origem: comHistorico.id, nome: 'Retirada', valor: 10 }] })],
+  };
+  const zeradaComHist = obterTodasCaixinhas(dados).caixinhas.find(c => c.id === comHistorico.id);
+  assert.equal(zeradaComHist.saldo, 0);
+  assert.equal(zeradaComHist.podeExcluir, false);
+  assert.match(zeradaComHist.motivoBloqueioExclusao, /hist/);
   assert.equal(checadaSemHist.podeExcluir, true);
   const dadosAposExclusao = executarExcluirCaixinha(dados, { id: semHistorico.id, autorUid: 'user-1' });
   const { caixinhas: caixasFinais } = obterTodasCaixinhas(dadosAposExclusao);
@@ -249,4 +275,44 @@ test('conciliação vincula pendência sem alterar o histórico original e regis
   assert.equal(eventoConciliar.caixinhaId, caixinhaAlvo.id);
   assert.equal(eventoConciliar.motivo, 'Vinculando retirada legada à caixinha permanente de Alimentação');
   assert.equal(eventoConciliar.vinculo.valor, 25);
+});
+
+test('movimento conciliado é contado uma vez após corrigir uma duplicidade de cadastro legada', () => {
+  const idDuplicado = 'legado-duplicado';
+  let dados = {
+    ...dadosPadrao(),
+    reservasDiarias: [
+      { id: idDuplicado, nome: 'Reserva ambígua', valor: 0 },
+      { id: idDuplicado, nome: 'Cadastro duplicado antigo', valor: 0 },
+    ],
+    historico: [turno('lancamento-legado', {
+      reservasDiariasDia: [{ id: idDuplicado, nome: 'Reserva ambígua', valor: 25 }],
+    })],
+  };
+  const pendencia = obterTodasCaixinhas(dados).pendencias.find(item => item.fonte === 'reserva-diaria');
+  assert.equal(pendencia.valor, 25);
+
+  dados = executarCriarCaixinha(dados, { nome: 'Destino confirmado', finalidade: '', autorUid: 'user-1' });
+  const destino = obterTodasCaixinhas(dados).caixinhas.find(c => c.nome === 'Destino confirmado');
+  dados = executarConciliarCaixinha(dados, {
+    pendencia, caixinhaId: destino.id, motivo: 'Vínculo revisado', autorUid: 'user-1',
+  });
+
+  // A correção de cadastro torna a reserva legada diretamente reconhecível.
+  dados = { ...dados, reservasDiarias: dados.reservasDiarias.filter((item, indice) => item.id !== idDuplicado || indice === 0) };
+  const relatorio = obterTodasCaixinhas(dados);
+  const caixaDestino = relatorio.caixinhas.find(c => c.id === destino.id);
+  const caixaProjetada = relatorio.caixinhas.find(c => c.id === `diaria:${idDuplicado}`);
+  assert.equal(caixaDestino.saldo, 25);
+  assert.equal(caixaDestino.movimentos.length, 1);
+  assert.equal(caixaProjetada.saldo, 0);
+  assert.equal(caixaProjetada.movimentos.length, 0);
+  const evidencia = pendencia.evidenciaRaw;
+  const vinculoServidor = {
+    caixinhaId: destino.id,
+    referencia: { lancamentoId: pendencia.lancamentoId, fonte: 'reserva-diaria', chaveOriginal: idDuplicado },
+    evidencia,
+  };
+  assert.equal(saldoComVinculos(dados, destino.id, [vinculoServidor]), 2500);
+  assert.equal(saldoComVinculos(dados, `diaria:${idDuplicado}`, [vinculoServidor]), 0);
 });

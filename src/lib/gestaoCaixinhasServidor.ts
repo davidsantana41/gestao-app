@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { uuidFinanceiro } from './comandoFinanceiro.ts';
-import { projetarCatalogoCaixinhas, revisarPendenciasCaixinhas, type IdCaixinha } from './catalogoCaixinhas.ts';
+import { chaveMovimentoConciliavel, projetarCatalogoCaixinhas, revisarPendenciasCaixinhas, type IdCaixinha } from './catalogoCaixinhas.ts';
 import { conferirReferenciaMovimentacao, referenciarMovimentacao, type ReferenciaMovimentacao } from './referenciaMovimentacao.ts';
 import { centavosParaReais, somarCentavos, somarHistoricoEmCentavos } from './centavosFinanceiros.ts';
-import { lerDados, type DadosPersistidos } from './gestao.ts';
+import { lerDados, moeda, type DadosPersistidos } from './gestao.ts';
 import { metadata, version } from './syncSession.ts';
 import { ErroServico, type TransacaoFinanceira } from './executorFinanceiroServidor.ts';
 import { nomeCaixinhaComOrigem, obterTodasCaixinhas, type EventoAuditoriaCaixinha } from './gestaoCaixinhasIntegrada.ts';
@@ -94,7 +94,14 @@ function saldo(evidencias: readonly Evidencia[]) {
 
 export function saldoComVinculos(dados: DadosPersistidos, id: IdCaixinha, vinculos: Vinculo[]) {
   const projetada = projetarCatalogoCaixinhas(dados).caixinhas.find(item => item.id === id);
-  return saldo([...(projetada?.evidencias ?? []), ...vinculos.filter(item => item.caixinhaId === id).map(item => item.evidencia)]);
+  const movimentosConciliados = new Set(vinculos.map(item =>
+    chaveMovimentoConciliavel(item.referencia.lancamentoId, item.evidencia.fonte, item.evidencia.indice),
+  ));
+  const evidenciasAtivas = (projetada?.evidencias ?? []).filter(e =>
+    (e.fonte !== 'retirada' && e.fonte !== 'reserva-diaria')
+      || !movimentosConciliados.has(chaveMovimentoConciliavel(e.lancamentoId, e.fonte, e.indice)),
+  );
+  return saldo([...evidenciasAtivas, ...vinculos.filter(item => item.caixinhaId === id).map(item => item.evidencia)]);
 }
 
 export async function validarSaldosConciliados(tx: Pick<TransacaoCatalogo, 'listar'>, espaco: string,
@@ -155,7 +162,7 @@ export async function consultarCaixinhas(tx: Pick<TransacaoCatalogo, 'listar'>, 
   const relatorio = obterTodasCaixinhas(dados, {
     catalogoComplementar: { ...dados, reservasDiarias: reservas, custosFixos: custos },
     vinculos: vinculos.map(({ id, caixinhaId, referencia, evidencia }) => ({
-      id, caixinhaId, lancamentoId: referencia.lancamentoId, fonte: evidencia.fonte, valor: evidencia.valor,
+      id, caixinhaId, lancamentoId: referencia.lancamentoId, indice: evidencia.indice, fonte: evidencia.fonte, valor: evidencia.valor,
       data: 'data' in evidencia ? evidencia.data : undefined, descricao: 'nome' in evidencia ? evidencia.nome : undefined,
       confirmadoEm: '', autorUid: '', motivo: '',
     })),
@@ -169,7 +176,8 @@ export async function consultarCaixinhas(tx: Pick<TransacaoCatalogo, 'listar'>, 
     let saldoCentavos = caixa.saldoCentavos;
     let totalCreditos = caixa.totalCreditos;
     let totalDebitos = caixa.totalDebitos;
-    let saldoAtestado = relatorio.pendencias.length === 0;
+    let saldoAtestado = !relatorio.pendencias.some(p => p.referencia === caixa.id
+      || p.candidatos.some(candidato => candidato.id === caixa.id));
     try {
       saldoCentavos = saldoComVinculos(dados, caixa.id, vinculos);
       totalCreditos = centavosParaReais(somarHistoricoEmCentavos(caixa.movimentos.filter(m => m.valor >= 0).map(m => m.valor)));
@@ -255,11 +263,16 @@ export async function confirmarCaixinha(tx: TransacaoCatalogo, uid: string, espa
     case 'caixinha-arquivar':
     case 'caixinha-excluir': {
       const vinculos = await vinculosDoEspaco(tx, espaco, dados);
-      if ((await pendenciasDoEspaco(dados, vinculos)).length) throw new ErroServico(422, 'Revise os vínculos pendentes antes de desativar ou excluir.');
+      const pendencias = await pendenciasDoEspaco(dados, vinculos);
+      if (pendencias.some(p => p.referencia === id || p.candidatos.some(c => c.caixinha.id === id))) {
+        throw new ErroServico(422, 'Revise os vínculos pendentes desta caixinha antes de desativar ou excluir.');
+      }
       let saldoAtual: number;
       try { saldoAtual = saldoComVinculos(dados, id, vinculos); }
       catch { throw new ErroServico(422, 'O saldo está em revisão.'); }
-      if (saldoAtual !== 0) throw new ErroServico(422, 'Zere o saldo com uma movimentação válida antes de arquivar ou excluir.');
+      if (saldoAtual !== 0) throw new ErroServico(422, saldoAtual > 0
+        ? `A caixinha possui saldo positivo de ${moeda(centavosParaReais(saldoAtual))}. Registre uma movimentação válida antes de desativar ou excluir.`
+        : `A caixinha possui saldo negativo de ${moeda(centavosParaReais(saldoAtual))}. Regularize o saldo antes de desativar ou excluir.`);
       if (!idDiaria && projetada?.configurada) throw new ErroServico(422, 'A caixinha ainda recebe rateios ou reservas automáticas. Desative a configuração associada antes de prosseguir.');
       const historicoCompleto = op.tipo === 'caixinha-excluir' ? projetarCatalogoCaixinhas({
         ...dados, historico: dados.historico.map(h => h.estornadoPor ? { ...h, estornadoPor: undefined } : h),
