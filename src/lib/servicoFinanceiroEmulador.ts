@@ -82,7 +82,7 @@ async function confirmar(db: Firestore, uid: string, espacoId: string, entrada: 
     };
     if (gestaoCaixinhas && acaoDeCaixinha(tipo)) return confirmarCaixinha(adaptador, uid, espaco, financeiro, entrada);
     return confirmarComando(adaptador, uid, espacoId, financeiro, entrada, gestaoCaixinhas ? {
-      atualizarCampos: true, criarCusto: true,
+      atualizarCampos: true, criarCusto: true, criarReservaDiaria: true,
       validarSaldos: (antes, depois, ids) => validarSaldosConciliados(adaptador, espaco, antes, depois, ids),
     } : undefined);
   });

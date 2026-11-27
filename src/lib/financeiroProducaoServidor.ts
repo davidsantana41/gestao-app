@@ -192,7 +192,7 @@ export async function gravarFinanceiroReal(authorization: string | undefined, co
     const tipo = (entrada as { alteracao?: { tipo?: unknown } } | null)?.alteracao?.tipo;
     if (acaoDeCaixinha(tipo)) return confirmarCaixinha(adaptador, uid, espaco, caminho, entrada);
     return confirmarComando(adaptador, uid, espacoId, caminho, entrada, {
-      atualizarCampos: true, criarCusto: true,
+      atualizarCampos: true, criarCusto: true, criarReservaDiaria: true,
       validarSaldos: (antes, depois, ids) => validarSaldosConciliados(adaptador, espaco, antes, depois, ids),
     });
   });

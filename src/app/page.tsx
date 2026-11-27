@@ -240,8 +240,15 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
             })).then(salvo => { if (salvo) { setEditando(undefined); setFormVersao(v => v + 1); } });
           })}
           onCancelar={() => { setEditando(undefined); setFormVersao(v => v + 1); }} onSalvar={(item, base) => {
-          const salvo = storage?.atualizar(d => ({ ...d, historico: editando ? d.historico.map(h => h.id === item.id ? item : h) : [item, ...d.historico],
-            reservasDiarias: editando ? d.reservasDiarias : (item.reservasDiariasDia ?? []).map(r => ({ ...r, valor: 0 })) }), base);
+          const salvo = storage?.atualizar(d => {
+            const reservasDiarias = (d.reservasDiarias ?? []).map(r => ({ ...r, valor: 0 }));
+            if (!editando) for (const reserva of item.reservasDiariasDia ?? []) {
+              const indices = reservasDiarias.flatMap((atual, indice) => atual.id === reserva.id ? [indice] : []);
+              if (indices.length === 1) reservasDiarias[indices[0]] = { ...reservasDiarias[indices[0]], nome: reserva.nome };
+              else if (indices.length === 0) reservasDiarias.push({ id: reserva.id, nome: reserva.nome, valor: 0 });
+            }
+            return { ...d, historico: editando ? d.historico.map(h => h.id === item.id ? item : h) : [item, ...d.historico], reservasDiarias };
+          }, base);
           if (salvo) { setMensagem(editando ? 'Alterações salvas no turno original.' : 'Turno registrado com sucesso.'); setEditando(undefined); setFormVersao(v => v + 1); }
         }} />}
         {!readOnly && <AvulsoForm key={`avulso-${recuperacaoVersao}-${financeiro ? 'servico' : dados._sync?.generation ?? 0}`} dados={dados} caixinhas={financeiro?.caixinhas?.relatorio.caixinhas} bloquearEnvio={bloquearEnvio}

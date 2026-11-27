@@ -176,7 +176,9 @@ export function montarFinanceiro(dados: DadosPersistidos, comando: ComandoFinanc
     }
     const item = criarTurno(comando.form, [], anterior?.id ?? comando.operacaoId, anterior);
     const nomesOriginais = new Map(anterior?.reservasDiariasDia?.map(r => [r.id, r.nome]));
-    item.reservasDiariasDia = item.reservasDiariasDia?.map(r => ({ ...r, nome: nomesOriginais.get(r.id) ?? r.nome }));
+    if (anterior) {
+      item.reservasDiariasDia = item.reservasDiariasDia?.map(r => ({ ...r, nome: nomesOriginais.get(r.id) ?? r.nome }));
+    }
     const detalhe = anterior ? item.detalheCustosFixosDia ?? {} : rateiosDoTurno(dados, comando.form.data, item);
     const fixos = anterior ? somarHistoricoEmCentavos([anterior.custosFixosDia])
       : somarCentavos(Object.values(detalhe).map(centavosNaoNegativos));
@@ -191,8 +193,17 @@ export function montarFinanceiro(dados: DadosPersistidos, comando: ComandoFinanc
     item.totalDespesas = centavosParaReais(despesas);
     item.liquido = centavosParaReais(somarCentavos([centavosNaoNegativos(item.faturamentoBruto), -despesas]));
     if (anterior) return { ...dados, historico: dados.historico.map(h => h.id === anterior.id ? item : h) };
+    const reservasDiarias = (dados.reservasDiarias ?? []).map(reserva => ({ ...reserva, valor: 0 }));
+    for (const reserva of item.reservasDiariasDia ?? []) {
+      const indices = reservasDiarias.flatMap((atual, indice) => atual.id === reserva.id ? [indice] : []);
+      if (indices.length === 1) {
+        reservasDiarias[indices[0]] = { ...reservasDiarias[indices[0]], nome: reserva.nome };
+      } else if (indices.length === 0) {
+        reservasDiarias.push({ id: reserva.id, nome: reserva.nome, valor: 0 });
+      }
+    }
     return { ...dados, historico: [item, ...dados.historico],
-      reservasDiarias: (item.reservasDiariasDia ?? []).map(r => ({ ...r, valor: 0 })) };
+      reservasDiarias };
   }
   if (comando.tipo === 'deposito-caixinha') {
     const { valor, descricao, data, operacaoId, familia, idOriginal } = comando;

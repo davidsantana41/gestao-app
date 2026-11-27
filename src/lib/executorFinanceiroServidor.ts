@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lerComandoFinanceiro, montarFinanceiro } from './comandoFinanceiro.ts';
+import { lerComandoFinanceiro, montarFinanceiro, uuidFinanceiro } from './comandoFinanceiro.ts';
 import { lerDados, type DadosPersistidos } from './gestao.ts';
 import { caixinhasAfetadas, saldoVerificavelEmCentavos } from './integridadeCaixinhas.ts';
 import { metadata, version } from './syncSession.ts';
@@ -24,7 +24,7 @@ export class ErroServico extends Error {
 }
 
 export async function confirmarComando(tx: TransacaoFinanceira, uid: string, espacoId: string, financeiro: string,
-  entrada: unknown, opcoes?: { atualizarCampos: boolean; criarCusto: boolean;
+  entrada: unknown, opcoes?: { atualizarCampos: boolean; criarCusto: boolean; criarReservaDiaria?: boolean;
     validarSaldos?: (antes: DadosPersistidos, depois: DadosPersistidos, ids: IdCaixinha[]) => Promise<void> }) {
   let comando;
   try {
@@ -62,13 +62,17 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
     throw new ErroServico(422, 'Use Estornar para preservar o lançamento e seu histórico.');
   }
   if (opcoes?.atualizarCampos && comando.tipo === 'turno' && !comando.alvo) {
-    const reservas = new Map(antes.reservasDiarias?.map(r => [r.id, r.nome]));
+    const reservas = new Set(antes.reservasDiarias?.map(r => r.id));
+    const identidadesConhecidas = new Set(projetarCatalogoCaixinhas(antes).caixinhas.map(item => item.id));
     for (const reserva of comando.form.reservas) {
-      if (reservas.get(reserva.id) !== reserva.nome) throw new ErroServico(422, 'A reserva do turno não corresponde ao catálogo confirmado.');
+      if (reservas.has(reserva.id)) continue;
+      if (!opcoes.criarReservaDiaria || !uuidFinanceiro.test(reserva.id)
+          || identidadesConhecidas.has(('diaria:' + reserva.id) as IdCaixinha)) {
+        throw new ErroServico(422, 'A nova reserva precisa de uma identidade permanente disponível. Atualize o cadastro e tente novamente.');
+      }
     }
   }
   const depois = validarMovimentos(() => montarFinanceiro(antes, comando));
-  if (opcoes?.atualizarCampos && comando.tipo === 'turno' && !comando.alvo) depois.reservasDiarias = antes.reservasDiarias;
   const { ids, alteraPendencias } = caixinhasAfetadas(antes, depois);
   if (alteraPendencias) throw new ErroServico(422, 'A alteração afeta referências ambíguas.');
   await opcoes?.validarSaldos?.(antes, depois, ids);
@@ -84,9 +88,18 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
       if (!conhecidos.has(id)) custosNovos.add(id);
     }
   }
+  const reservasNovas = new Set<string>();
+  if (opcoes?.atualizarCampos && opcoes.criarReservaDiaria && comando.tipo === 'turno' && !comando.alvo) {
+    const idsAnteriores = new Set((antes.reservasDiarias ?? []).map(reserva => reserva.id));
+    const identidadesAnteriores = new Set(projetarCatalogoCaixinhas(antes).caixinhas.map(item => item.id));
+    for (const reserva of depois.reservasDiarias ?? []) {
+      const id = ('diaria:' + reserva.id) as IdCaixinha;
+      if (!idsAnteriores.has(reserva.id) && !identidadesAnteriores.has(id)) reservasNovas.add(id);
+    }
+  }
   const criar: string[] = [];
   for (const { id, dados } of catalogo) {
-    if (!dados && custosNovos.has(id)) {
+    if (!dados && (custosNovos.has(id) || reservasNovas.has(id))) {
       if (!opcoes?.validarSaldos) validarMovimentos(() => saldoVerificavelEmCentavos(depois, id));
       criar.push(id);
       continue;
@@ -108,6 +121,8 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
     : comando.tipo === 'preferencias'
       ? { ...(comando.modoEscuro !== undefined && { modoEscuro: depois.modoEscuro }),
         ...(comando.lembrete !== undefined && { lembrete: depois.lembrete }) }
+      : comando.tipo === 'turno' && !comando.alvo
+        ? { historico: depois.historico, reservasDiarias: depois.reservasDiarias ?? [] }
       : { historico: depois.historico };
   const _sync = { ...sync, revision: proximaRevisao };
   tx.set(financeiro, opcoes?.atualizarCampos ? { ...campos, _sync } : { ...depois, _sync });

@@ -29,17 +29,16 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar, onCom
   const [base] = useState(() => structuredClone(dados));
   const baseComando = useRef<DadosPersistidos>(null);
   const [erro, setErro] = useState('');
-  const form = onComando && !original ? {
-    ...rascunho,
-    reservas: novoFormulario(dados.reservasDiarias).reservas.map(r => ({
-      ...r, valor: rascunho.reservas.find(item => item.id === r.id)?.valor ?? '',
-    })),
-  } : rascunho;
+  const form = rascunho;
+  const contagemPorId = new Map<string, number>();
+  for (const reserva of form.reservas) contagemPorId.set(reserva.id, (contagemPorId.get(reserva.id) ?? 0) + 1);
+  const idsDuplicados = new Set([...contagemPorId].filter(([, quantidade]) => quantidade > 1).map(([id]) => id));
   const conta = calcularTurno(form, dados.custosFixos, original);
   const campo = (nome: Exclude<keyof TurnoFormulario, 'reservas'>, valor: string) => dispatch({ tipo: 'campo', campo: nome, valor });
   const salvar = (event: React.FormEvent) => {
     event.preventDefault();
     setErro('');
+    if (idsDuplicados.size) { setErro('Há reservas com identificadores repetidos no cadastro. Revise essas reservas antes de salvar para preservar os vínculos existentes.'); return; }
     if (form.reservas.some(r => !r.nome.trim())) { setErro('Dê um nome a cada reserva ou remova as que não deseja salvar.'); return; }
     if (numero(form.kmTotal) < numero(form.kmTrabalhado)) { setErro('O KM total deve ser maior ou igual ao KM trabalhado.'); return; }
     if (!numero(form.faturamento) && !numero(form.combustivel) && !conta.totalReservas && !conta.acidente && !conta.reserva1 && !conta.reserva2) {
@@ -69,12 +68,13 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar, onCom
         </div>
       </section>
       <section className="painel">
-        <div className="titulo-linha"><div><h2>Reservas do turno</h2><p className="ajuda">{onComando ? 'Informe os valores para as reservas já cadastradas.' : 'Você escolhe o nome e quanto separar hoje.'}</p></div>{!onComando && <button type="button" className="botao secundario" onClick={() => dispatch({ tipo: 'adicionar', id: crypto.randomUUID() })}>+ Adicionar reserva</button>}</div>
+        <div className="titulo-linha"><div><h2>Reservas do turno</h2><p className="ajuda">Você pode ajustar os nomes e valores deste turno. Remover uma linha não desativa a caixinha.</p></div>{!original && <button type="button" className="botao secundario" onClick={() => dispatch({ tipo: 'adicionar', id: crypto.randomUUID() })}>+ Adicionar reserva</button>}</div>
+        {idsDuplicados.size > 0 && <p role="alert" className="mensagem aviso">Há reservas repetidas no cadastro: {[...new Set(form.reservas.filter(r => idsDuplicados.has(r.id)).map(r => r.nome || 'Reserva sem nome'))].join(', ')}. Os dados foram preservados; revise esses identificadores antes de salvar.</p>}
         {form.reservas.length === 0 && <p className="vazio">Nenhuma reserva neste turno.</p>}
-        <div className="pilha compacta">{form.reservas.map(r => <div className="linha-reserva" key={r.id} data-testid="reserva">
-          <Campo label="Nome da reserva" value={r.nome} readOnly={Boolean(onComando)} placeholder="Ex.: Manutenção, férias…" onChange={e => dispatch({ tipo: 'reserva', id: r.id, campo: 'nome', valor: e.currentTarget.value })} />
-          <Valor label="Valor (R$)" value={r.valor} onChange={v => dispatch({ tipo: 'reserva', id: r.id, campo: 'valor', valor: v, nomeCatalogo: r.nome })} />
-          {!onComando && <button type="button" className="botao icone perigo" aria-label={`Excluir reserva ${r.nome || 'nova'}`} onClick={() => { if (window.confirm(`Excluir ${r.nome || 'esta reserva'} do turno?`)) dispatch({ tipo: 'remover', id: r.id }); }}>×</button>}
+        <div className="pilha compacta">{form.reservas.map((r, indice) => <div className="linha-reserva" key={`${r.id}-${indice}`} data-testid="reserva">
+          <Campo label="Nome da reserva" value={r.nome} readOnly={Boolean((onComando && original) || idsDuplicados.has(r.id))} placeholder="Ex.: Manutenção, férias…" onChange={e => dispatch({ tipo: 'reserva', id: r.id, campo: 'nome', valor: e.currentTarget.value })} />
+          <Valor label="Valor (R$)" value={r.valor} disabled={idsDuplicados.has(r.id)} onChange={v => dispatch({ tipo: 'reserva', id: r.id, campo: 'valor', valor: v, nomeCatalogo: r.nome })} />
+          {!original && <button type="button" className="botao icone perigo" aria-label={`Remover ${r.nome || 'reserva nova'} deste turno`} disabled={idsDuplicados.has(r.id)} title="Remove a linha somente deste turno; a caixinha e o histórico permanecem." onClick={() => { if (window.confirm(`Remover ${r.nome || 'esta reserva'} deste turno? A caixinha e o histórico serão mantidos.`)) dispatch({ tipo: 'remover', id: r.id }); }}>×</button>}
         </div>)}</div>
         <div className="total-linha" aria-live="polite"><span>Total das reservas do turno</span><strong data-testid="total-reservas">{moeda(conta.totalReservas)}</strong></div>
         <div className="nota">Depois de salvar, os nomes continuam disponíveis e os valores do próximo turno começam zerados.</div>
@@ -98,7 +98,7 @@ export default function TurnoForm({ dados, original, onSalvar, onCancelar, onCom
         <div className="saldo" data-saldo={sinalSaldo(conta.liquido)}><span>{onComando ? 'Saldo estimado do turno' : 'Saldo líquido do turno'}</span><strong data-testid="saldo-turno">{moeda(conta.liquido)}</strong></div>
         <p className="nota">Custos mensais divididos por {conta.dias} dias de trabalho. Reserva de acidente: R$ 0,038 × KM total.</p>
         {erro && <p role="alert" className="mensagem erro">{erro}</p>}
-        <button type="submit" className="botao primario largo" disabled={bloquearEnvio}>{original ? 'Salvar alterações' : 'Salvar turno'}</button>
+        <button type="submit" className="botao primario largo" disabled={bloquearEnvio || idsDuplicados.size > 0}>{original ? 'Salvar alterações' : 'Salvar turno'}</button>
         {original && <button type="button" className="botao secundario largo" onClick={onCancelar}>Cancelar edição</button>}
       </section>
     </aside>
