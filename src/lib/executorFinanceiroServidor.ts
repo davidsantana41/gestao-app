@@ -92,8 +92,12 @@ export async function confirmarComando(tx: TransacaoFinanceira, uid: string, esp
         });
       }
     }
+    // Firestore does not allow server timestamp transforms inside array values.
+    // Keep the exact server timestamp on the operation receipt below, and store
+    // a serializable confirmation time in the embedded history entry.
+    const confirmadoEmHistorico = new Date().toISOString();
     depois = { ...depois, historico: depois.historico.map(item => item.id === comando.operacaoId
-      ? { ...item, confirmadoEm } : item) };
+      ? { ...item, confirmadoEm: confirmadoEmHistorico } : item) };
   }
   const { ids, alteraPendencias } = caixinhasAfetadas(antes, depois);
   if (alteraPendencias) throw new ErroServico(422, 'A alteração afeta referências ambíguas.');
