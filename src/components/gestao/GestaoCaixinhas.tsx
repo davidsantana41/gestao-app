@@ -19,7 +19,7 @@ export type GestaoCaixinhasProps = {
   motivoBloqueioEnvio?: string;
   motivoSomenteLeitura?: string;
   leitura?: LeituraCaixinhas;
-  onComando?: (alteracao: Record<string, unknown>, base: DadosPersistidos) => Promise<false | 'confirmada' | 'enfileirada'>;
+  onComando?: (alteracao: Record<string, unknown>, base: DadosPersistidos) => Promise<false | 'confirmada'>;
 };
 
 type AbaCaixinhas = 'ativas' | 'arquivadas' | 'conciliacao' | 'auditoria';
@@ -133,12 +133,12 @@ export default function GestaoCaixinhas({
           ? comandoPayload.origem === 'principal' ? 'deposito-caixinha' : 'retirada'
           : String(comandoPayload.tipo);
         if (bloquearEnvio || !podeAcao(acao)) {
-          const mensagem = 'A operação está indisponível no momento. Atualize os dados e tente novamente.';
+          const mensagem = 'A operação está indisponível no momento. Confira a conexão e tente novamente.';
           if (!retornoNoModal) setFeedback({ tipo: 'erro', texto: mensagem });
           return { ok: false, mensagem };
         }
         if (dialogo.base._sync?.generation !== dados._sync?.generation || dialogo.base._sync?.revision !== dados._sync?.revision) {
-          const mensagem = 'Os dados financeiros mudaram. Atualize o painel e revise a transferência antes de tentar novamente.';
+          const mensagem = 'Os dados financeiros mudaram. Feche e reabra a janela para revisar a transferência.';
           if (!retornoNoModal) setFeedback({ tipo: 'erro', texto: mensagem });
           return { ok: false, mensagem };
         }
@@ -149,8 +149,7 @@ export default function GestaoCaixinhas({
           setMenuAberto(null);
           setFeedback({ tipo: 'sucesso', texto: comandoPayload.tipo === 'transferencia-interna'
             ? 'Transferência realizada com sucesso'
-            : resultado === 'confirmada' ? 'Operação confirmada pelo serviço financeiro.'
-              : 'Operação adicionada à fila. Acompanhe a confirmação no painel.' });
+            : 'Operação confirmada pelo serviço financeiro.' });
           setModal(null);
           return { ok: true };
         } else {
@@ -196,7 +195,7 @@ export default function GestaoCaixinhas({
         )}
       </div>
       {bloquearEnvio && !readOnly && <p id="motivo-bloqueio-caixinhas" role="status" className="mensagem aviso">
-        {motivoBloqueioEnvio || 'As operações estão temporariamente indisponíveis. Confira a conexão e a fila financeira.'}
+        {motivoBloqueioEnvio || 'As operações estão temporariamente indisponíveis. Confira a conexão e os dados confirmados.'}
       </p>}
       {readOnly && leitura && <p role="status" className="mensagem aviso">
         {motivoSomenteLeitura || 'Este acesso está em modo somente leitura; operações das caixinhas não estão disponíveis.'}

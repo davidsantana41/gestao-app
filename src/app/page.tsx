@@ -11,7 +11,8 @@ import ModuloSelecao from '@/components/ModuloSelecao';
 import GestaoFamiliar from '@/components/GestaoFamiliar';
 import AppcarLogo from '@/components/AppcarLogo';
 import CadastroMotorista from '@/components/gestao/CadastroMotorista';
-import FilaNoPainel from '@/components/gestao/FilaNoPainel';
+import IndicadorConexao, { type EstadoConexao } from '@/components/gestao/IndicadorConexao';
+import RecuperacaoFilaLegada from '@/components/gestao/RecuperacaoFilaLegada';
 import TurnoForm from '@/components/gestao/TurnoForm';
 import CustosFixos from '@/components/gestao/CustosFixos';
 import AvulsoForm from '@/components/gestao/AvulsoForm';
@@ -35,7 +36,7 @@ function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; on
   return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} readOnly={readOnly} maxLength={500} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label>{!readOnly && <button className="botao secundario" type="button" onClick={async () => { if (await onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button>}</section>;
 }
 
-function CabecalhoApp({ email, cadastroUid, readOnly, modoEscuro, saindo, convitePendente, contaAberta, onAbrirConta, onAlternarTema, onSair, onTrocarModulo }: {
+function CabecalhoApp({ email, cadastroUid, readOnly, modoEscuro, saindo, convitePendente, contaAberta, estadoConexao, onAbrirConta, onAlternarTema, onSair, onTrocarModulo }: {
   email: string | null;
   cadastroUid?: string;
   readOnly: boolean;
@@ -43,12 +44,13 @@ function CabecalhoApp({ email, cadastroUid, readOnly, modoEscuro, saindo, convit
   saindo: boolean;
   convitePendente: boolean;
   contaAberta: boolean;
+  estadoConexao?: EstadoConexao;
   onAbrirConta?: () => void;
   onAlternarTema?: () => void;
   onSair?: () => Promise<void>;
   onTrocarModulo?: () => void;
 }) {
-  return <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario">{cadastroUid ? <CadastroMotorista uid={cadastroUid} email={email} tema={modoEscuro ? 'escuro' : 'claro'} /> : <span>{email}</span>}{readOnly && <span className="selo">Somente visualização</span>}{onTrocarModulo && <button type="button" className="botao discreto" onClick={onTrocarModulo} title="Voltar à seleção de módulos">Módulos</button>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && onAlternarTema && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}{onSair && <button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button>}</div></div></header>;
+  return <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario">{estadoConexao && <IndicadorConexao estado={estadoConexao} />}{cadastroUid ? <CadastroMotorista uid={cadastroUid} email={email} tema={modoEscuro ? 'escuro' : 'claro'} /> : <span>{email}</span>}{readOnly && <span className="selo">Somente visualização</span>}{onTrocarModulo && <button type="button" className="botao discreto" onClick={onTrocarModulo} title="Voltar à seleção de módulos">Módulos</button>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && onAlternarTema && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}{onSair && <button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button>}</div></div></header>;
 }
 
 type DashboardProps = {
@@ -108,14 +110,20 @@ function ResolverDashboard({ viewerUid, ...props }: DashboardProps & { viewerUid
     return () => abortar.abort();
   }, [props.uid, viewerUid, tentativa]);
 
+  useEffect(() => {
+    if (!erro || destino) return;
+    const repetir = window.setTimeout(() => { setErro(''); setTentativa(v => v + 1); }, 15000);
+    return () => window.clearTimeout(repetir);
+  }, [erro, destino]);
+
   if (destino?.modo === 'legado') return <Dashboard {...props} viewerUid={viewerUid} />;
   if (destino?.modo === 'integrado') return <DashboardFinanceiroReal {...props} viewerUid={viewerUid} espacoId={destino.espacoId} />;
-  return <main className="acesso"><section className="painel pilha compacta">
-    <AppcarLogo centralizado />
-    <p role={erro ? 'alert' : 'status'}>{erro || 'Confirmando o espaço financeiro…'}</p>
-    {erro && <button type="button" className="botao primario" onClick={() => { setErro(''); setTentativa(v => v + 1); }}>Tentar novamente</button>}
-    {props.onTrocarModulo && <button type="button" className="botao secundario" onClick={props.onTrocarModulo}>Voltar aos módulos</button>}
-  </section></main>;
+  return <main className="app">
+    <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario"><IndicadorConexao estado={erro ? 'indisponivel' : 'sincronizando'} />{props.onTrocarModulo && <button type="button" className="botao discreto" onClick={props.onTrocarModulo}>Módulos</button>}</div></div></header>
+    <div className="container conteudo"><section className="painel painel-carregando" aria-busy="true">
+      <h1>Painel do motorista</h1><p role={erro ? 'alert' : 'status'}>{erro ? 'Não foi possível carregar os dados confirmados. Tentando novamente…' : 'Carregando dados financeiros confirmados…'}</p>
+    </section></div>
+  </main>;
 }
 
 type OrigemPainel = { storage: ReturnType<typeof useGestao>; financeiro?: never }
@@ -132,13 +140,15 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
   const [mensagem, setMensagem] = useState('');
   const [confirmacao, setConfirmacao] = useState<{ titulo: string; descricao: string; confirmar: string; executar: () => void }>();
   const [saindo, setSaindo] = useState(false);
-  if (!dados && financeiro) return <main className="app"><div className="container conteudo pilha">
-    {readOnly ? <section className="painel pilha compacta">
-      <p role={financeiro.erro ? 'alert' : 'status'}>{financeiro.erro || 'Carregando espaço compartilhado…'}</p>
-      {financeiro.erro && <button type="button" className="botao secundario" onClick={() => void financeiro.atualizar()}>Tentar novamente</button>}
-    </section> : <FilaNoPainel financeiro={financeiro} />}
-    {onTrocarModulo && <div><button type="button" className="botao secundario" onClick={onTrocarModulo}>Voltar aos módulos</button></div>}
-  </div></main>;
+  const estadoConexao: EstadoConexao | undefined = financeiro
+    ? !financeiro.conectada ? 'offline'
+      : financeiro.servicoDisponivel === false ? 'indisponivel'
+        : financeiro.sincronizando || financeiro.ocupado || financeiro.servicoDisponivel === null ? 'sincronizando' : 'conectado'
+    : undefined;
+  if (!dados && financeiro) return <main className="app">
+    <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario">{estadoConexao && <IndicadorConexao estado={estadoConexao} />}{onTrocarModulo && <button type="button" className="botao discreto" onClick={onTrocarModulo}>Módulos</button>}</div></div></header>
+    <div className="container conteudo"><section className="painel painel-carregando" aria-busy="true"><h1>{readOnly ? 'Espaço compartilhado' : 'Painel do motorista'}</h1><p role={financeiro.erro ? 'alert' : 'status'}>{financeiro.erro ? 'Não foi possível carregar os dados confirmados. Tentando novamente…' : 'Carregando dados financeiros confirmados…'}</p></section></div>
+  </main>;
   if (!dados && !storage) return null;
   if (!dados) return <main className="acesso"><section className="painel"><AppcarLogo subtitulo="Carregando..." centralizado /><h1>{storage?.erro ? 'Vamos recuperar seus dados' : 'Carregando seu painel'}</h1><p role={storage?.erro ? 'alert' : 'status'}>{storage?.erro || storage?.status}</p>{storage?.erro && <button className="botao primario" onClick={storage.tentarNovamente}>Tentar novamente</button>}</section></main>;
   const resumo = resumir(dados.historico);
@@ -208,17 +218,17 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
         </div>
       </form>
     </div>}
-    <CabecalhoApp email={email} cadastroUid={!readOnly && viewerUid === uid ? uid : undefined} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} onAbrirConta={onAbrirConta} onAlternarTema={alternarTema} onTrocarModulo={onTrocarModulo} onSair={storage || financeiro?.producao ? async () => {
+    <CabecalhoApp email={email} cadastroUid={!readOnly && viewerUid === uid ? uid : undefined} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} estadoConexao={estadoConexao} onAbrirConta={onAbrirConta} onAlternarTema={alternarTema} onTrocarModulo={onTrocarModulo} onSair={storage || financeiro?.producao ? async () => {
       setSaindo(true); try { await storage?.aguardar(); await signOut(auth); } catch { setMensagem('Não foi possível sair. Tente novamente em instantes.'); } finally { setSaindo(false); }
     } : undefined} />
     {contaView ? <div className="container conteudo">{contaView}</div> : <div className="container conteudo">
       {(storage || financeiro?.producao) && <VerificarEmail />}
       <div className="boas-vindas"><div><p className="sobretitulo">{readOnly ? 'ESPAÇO COMPARTILHADO' : 'GESTÃO DO MOTORISTA'}</p><h1>{readOnly ? 'Dados do proprietário' : 'Seu painel de trabalho'}</h1><p>{readOnly ? 'Você está consultando este espaço em modo Somente visualização.' : 'Acompanhe cada turno e dê um destino ao seu dinheiro.'}</p></div><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>{!readOnly && <button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button>}</div></div>
       {onAbrirConta && <div className="espaco-atual" role="status"><span>Espaço atual</span><strong>{readOnly ? 'Compartilhado · Somente visualização' : 'Meus dados'}</strong><button type="button" className="botao discreto" onClick={onAbrirConta}>Espaços compartilhados</button></div>}
-      {financeiro && (readOnly
-        ? <div className="barra-status"><p role={financeiro.erro ? 'alert' : 'status'}>{financeiro.erro || 'Espaço compartilhado · dados confirmados'}</p>
-          <button type="button" className="botao discreto" onClick={() => void financeiro.atualizar()}>Atualizar</button></div>
-        : <FilaNoPainel financeiro={financeiro} />)}
+      {financeiro && (!financeiro.conectada || financeiro.servicoDisponivel === false) && <p className="barra-status" role="status">
+        {!financeiro.conectada ? 'Sem conexão. Os campos serão preservados e novas gravações estão bloqueadas.' : 'Serviço financeiro indisponível. Reconectando automaticamente…'}
+      </p>}
+      {financeiro?.producao && !readOnly && <RecuperacaoFilaLegada financeiro={financeiro} />}
       {storage && <div className="barra-status"><span className="ponto" /><p role="status">{storage.status}</p><button type="button" className="botao discreto" onClick={storage.tentarNovamente}>Verificar sincronização</button></div>}
       {!readOnly && storage && storage.recuperacoes.length > 0 && <section className="painel aviso"><h2>Cópias locais de outras sessões</h2><p>Há cópias com alterações pendentes neste navegador. Recuperar uma cópia preserva os dados atuais e exige comparação com a nuvem.</p>{storage.recuperacoes.map((copia, indice) => <button key={copia.key} type="button" className="botao secundario" onClick={() => setConfirmacao({ titulo: 'Recuperar cópia local?', descricao: 'Os dados atuais serão preservados antes da recuperação. Nenhuma gravação na nuvem será feita automaticamente.', confirmar: 'Recuperar cópia', executar: () => { if (storage.recuperar(copia.key)) { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); } } })}>Recuperar cópia {indice + 1} ({copia.data.historico.length} lançamentos)</button>)}</section>}
       {storage?.erro && <p role="alert" className="mensagem erro">{storage.erro}</p>}
@@ -274,9 +284,8 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
           motivoBloqueioEnvio={financeiro?.motivoBloqueio}
           leitura={financeiro?.caixinhas}
           onComando={financeiro?.caixinhas ? async (alteracao, base) => {
-            const modo = financeiro.modoGravacao;
             const enviado = await registrar(base, () => alteracao);
-            return enviado ? modo === 'direto' ? 'confirmada' : 'enfileirada' : false;
+            return enviado ? 'confirmada' : false;
           } : undefined}
         />
       )}
@@ -358,10 +367,17 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
   }
 
   const hashFinanceiroConfigurado = process.env.NEXT_PUBLIC_APPCAR_FINANCEIRO_UID_SHA256?.toLowerCase();
+  const verificarUidFinanceiro = Boolean(hashFinanceiroConfigurado && /^[a-f0-9]{64}$/.test(hashFinanceiroConfigurado));
   const financeiroAutorizado = espacoAtivo === 'proprio'
     && verificacaoFinanceiro?.uid === sessao.uid
     && verificacaoFinanceiro.hashEsperado === hashFinanceiroConfigurado
     && verificacaoFinanceiro.autorizado;
+  const validandoFinanceiro = espacoAtivo === 'proprio' && verificarUidFinanceiro
+    && verificacaoFinanceiro?.uid !== sessao.uid;
+  if (validandoFinanceiro) return <main className="app claro">
+    <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario"><IndicadorConexao estado="sincronizando" /><button type="button" className="botao discreto" onClick={() => setModulo('selecao')}>Módulos</button></div></div></header>
+    <div className="container conteudo"><section className="painel painel-carregando" aria-busy="true"><h1>Painel do motorista</h1><p role="status">Validando acesso e carregando dados confirmados…</p></section></div>
+  </main>;
   const Painel = financeiroAutorizado ? ResolverDashboard : Dashboard;
   return (
     <Painel

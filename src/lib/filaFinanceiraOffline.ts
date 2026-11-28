@@ -173,19 +173,6 @@ export async function abrirFilaFinanceiraOffline(opcoes: {
         throw new Error('Integridade da cópia ou segredo local incompatível.');
       }
     },
-    enfileirar: async (revisao: number, alteracao: Record<string, unknown>) => {
-      if (!Number.isSafeInteger(revisao) || revisao < 0 || revisao >= Number.MAX_SAFE_INTEGER
-          || !alteracao || typeof alteracao !== 'object' || Array.isArray(alteracao)) throw new Error('Comando local inválido.');
-      const comando = { operacaoId: crypto.randomUUID(), geracao, revisao, alteracao };
-      const texto = serializarItens(comando);
-      if (codificador.encode(texto).length > 32_768) throw new Error('Comando local excede o limite.');
-      const item: Item = { comando: JSON.parse(texto) as Comando, estado: 'pendente' };
-      return comFila(async (itens, salvar) => {
-        itens.push(item);
-        await salvar();
-        return structuredClone(item);
-      });
-    },
     enviarProximo: (aoEnviar?: (item: Item) => void) => comFila(async (itens, salvar) => {
       const indice = itens.findIndex(item => item.estado === 'enviando' || item.estado === 'pendente');
       if (indice < 0) return undefined;
@@ -203,17 +190,6 @@ export async function abrirFilaFinanceiraOffline(opcoes: {
       itens[indice] = item;
       await salvar();
       return structuredClone(item);
-    }),
-    limparConfirmados: (anterioresA: number) => comFila(async (itens, salvar) => {
-      if (!Number.isSafeInteger(anterioresA) || anterioresA < 0 || anterioresA > Date.now()) throw new Error('Data de limpeza inválida.');
-      const mantidos = itens.filter(item => item.estado !== 'confirmado' || !item.recibo
-        || item.confirmadoEm === undefined || item.confirmadoEm >= anterioresA);
-      const removidos = itens.length - mantidos.length;
-      if (removidos) {
-        itens.splice(0, itens.length, ...mantidos);
-        await salvar();
-      }
-      return removidos;
     }),
   };
 }

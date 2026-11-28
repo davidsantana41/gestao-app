@@ -1,4 +1,4 @@
-import { consultarFinanceiroReal, gravarFinanceiroReal } from '@/lib/financeiroProducaoServidor';
+import { consultarFinanceiroReal, consultarOperacaoFinanceiraReal, gravarFinanceiroReal } from '@/lib/financeiroProducaoServidor';
 import { ErroServico } from '@/lib/executorFinanceiroServidor';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -49,6 +49,9 @@ async function lerComando(req: Request) {
 export async function GET(req: Request) {
   try {
     const params = new URL(req.url).searchParams;
+    const operacaoId = params.get('operacaoId');
+    if (operacaoId) return responder(await consultarOperacaoFinanceiraReal(req.headers.get('authorization') ?? undefined,
+      req.headers.get('x-appcar-conta-fila'), params.get('espaco') ?? '', operacaoId));
     return responder(await consultarFinanceiroReal(req.headers.get('authorization') ?? undefined,
       params.get('titular'), params.get('destino') === '1'));
   } catch (erro) { return falha(erro); }

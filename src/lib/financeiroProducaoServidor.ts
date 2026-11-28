@@ -167,6 +167,24 @@ export async function consultarFinanceiroReal(authorization: string | undefined,
   });
 }
 
+export async function consultarOperacaoFinanceiraReal(authorization: string | undefined, contaFila: string | null,
+  espacoId: string, operacaoId: string) {
+  if (!uuidFinanceiro.test(espacoId) || !uuidFinanceiro.test(operacaoId)) throw new ErroServico(400, 'Identificador invÃ¡lido.');
+  const { db, uid } = await autenticarRequisicao(authorization);
+  if (contaFila !== uid) throw new ErroServico(403, 'A sessÃ£o pertence a outra conta.', 'conta-divergente');
+  return db.runTransaction(async tx => {
+    const marker = (await tx.get(db.doc('financeiroIntegrado/' + uid))).data();
+    if (!marker || espacoIntegrado(marker) !== espacoId) throw new ErroServico(403, 'EspaÃ§o integrado nÃ£o autorizado.');
+    const controle = (await tx.get(db.doc('espacosFinanceiros/' + espacoId))).data();
+    if (controle?.proprietarioUid !== uid) throw new ErroServico(403, 'Titularidade do espaÃ§o nÃ£o confirmada.');
+    const registro = (await tx.get(db.doc('espacosFinanceiros/' + espacoId + '/operacoes/' + operacaoId))).data();
+    if (!registro) return { estado: 'nao-confirmada' as const, operacaoId };
+    if (registro.autorUid !== uid || registro.espacoId !== espacoId || registro.id !== operacaoId
+        || !Number.isSafeInteger(registro.revisao)) throw new ErroServico(503, 'Registro da operaÃ§Ã£o incompatÃ­vel.');
+    return { estado: 'confirmada' as const, operacaoId, revisao: registro.revisao as number };
+  });
+}
+
 export async function gravarFinanceiroReal(authorization: string | undefined, contaFila: string | null,
   espacoId: string, entrada: unknown) {
   if (!uuidFinanceiro.test(espacoId)) throw new ErroServico(400, 'Espaço inválido.');

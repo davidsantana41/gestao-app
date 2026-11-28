@@ -16,7 +16,7 @@ export type SessaoFinanceiraLocal = { uid: string; espacoId: string; email: stri
 type SessaoFinanceiraReal = { uid: string; espacoId: string; titular: string; readOnly: boolean; obterToken: () => Promise<string | null> };
 type Fila = Awaited<ReturnType<typeof abrirFilaFinanceiraOffline>>;
 type FilaAberta = { geracao: number; fila: Fila };
-type ComandoDiretoPendente = { operacaoId: string; geracao: number; revisao: number; assinatura: string };
+type ComandoDiretoPendente = { operacaoId: string; geracao: number; revisao: number; assinatura: string; statusVerificado: boolean };
 
 export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | SessaoFinanceiraReal) {
   const { uid, espacoId } = identidade;
@@ -25,8 +25,11 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   const dados = leituraConfirmada?.financeiro;
   const [itens, setItens] = useState<ItemFilaFinanceira[]>([]);
   const [geracoes, setGeracoes] = useState<number[]>([]);
+  const [geracoesConferidas, setGeracoesConferidas] = useState<number[]>([]);
   const [filaLocalVerificada, setFilaLocalVerificada] = useState(false);
   const [conectada, setConectada] = useState(false);
+  const [servicoDisponivel, setServicoDisponivel] = useState<boolean | null>(null);
+  const [sincronizando, setSincronizando] = useState(true);
   const [aberta, setAberta] = useState<number>();
   const [erro, setErro] = useState('');
   const [ocupado, setOcupado] = useState(false);
@@ -36,6 +39,8 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   const comandoDiretoPendente = useRef<ComandoDiretoPendente | undefined>(undefined);
   const operando = useRef(false);
   const sessao = useRef<{ token: string; ate: number }>(null);
+  const consultaAtiva = useRef<Promise<void> | null>(null);
+  const ultimaConsulta = useRef(0);
 
   async function obterToken() {
     if ('obterToken' in identidade) return identidade.obterToken();
@@ -53,6 +58,11 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   }
 
   async function consultar() {
+    if (consultaAtiva.current) return consultaAtiva.current;
+    const consulta = (async () => {
+    setSincronizando(true);
+    let respostaRecebida = false;
+    try {
     const token = await obterToken();
     if (!token) throw new Error('Autentique a conta para consultar os dados confirmados.');
     const destino = real ? `/api/financeiro?titular=${encodeURIComponent(real.titular)}` : `/espacos/${espacoId}/consulta`;
@@ -60,12 +70,16 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
       headers: { Authorization: `Bearer ${token}`, 'X-Appcar-Conta-Fila': uid },
       cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12000),
     });
+    respostaRecebida = true;
+    setServicoDisponivel(resposta.status < 500);
     if (resposta.status === 401) sessao.current = null;
     if (!resposta.ok) {
+      setServicoDisponivel(resposta.status < 500);
       if (real) setGravavel(false);
       if (resposta.status === 401 || resposta.status === 403) setLeituraConfirmada(undefined);
       throw new Error('Não foi possível consultar o financeiro confirmado.');
     }
+    setServicoDisponivel(true);
     const leitura = await resposta.json() as { financeiro: DadosPersistidos; modo?: string; espacoId?: string; gravavel?: boolean; caixinhas?: LeituraCaixinhas; gestaoCaixinhas?: LeituraCaixinhas };
     if (real && (leitura.modo !== 'integrado' || leitura.espacoId !== espacoId || !leitura.caixinhas)) {
       setGravavel(false);
@@ -83,11 +97,47 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
       if (base && (base.generation > versao.generation || (base.generation === versao.generation && base.revision > versao.revision))) return atual;
       return { financeiro, caixinhas: real ? leitura.caixinhas : leitura.gestaoCaixinhas };
     });
+    ultimaConsulta.current = Date.now();
+    setErro('');
+    } catch (falha) {
+      if (!respostaRecebida) setServicoDisponivel(false);
+      throw falha;
+    } finally {
+      setSincronizando(false);
+      consultaAtiva.current = null;
+    }
+    })();
+    consultaAtiva.current = consulta;
+    return consulta;
   }
 
   async function atualizar() {
     setErro('');
     try { await consultar(); } catch (falha) { setErro((falha as Error).message); }
+  }
+
+  async function consultarOperacaoPendente() {
+    const pendente = comandoDiretoPendente.current;
+    if (!pendente || !real) return false;
+    const token = await obterToken();
+    if (!token) throw new Error('Autentique a conta para consultar a confirmaÃ§Ã£o pendente.');
+    const resposta = await fetch(`/api/financeiro?espaco=${encodeURIComponent(espacoId)}&operacaoId=${encodeURIComponent(pendente.operacaoId)}`, {
+      headers: { Authorization: `Bearer ${token}`, 'X-Appcar-Conta-Fila': uid },
+      cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12000),
+    });
+    setServicoDisponivel(resposta.status < 500);
+    if (!resposta.ok) throw new Error('NÃ£o foi possÃ­vel consultar a confirmaÃ§Ã£o pendente.');
+    const status = await resposta.json() as { estado?: unknown; operacaoId?: unknown; revisao?: unknown };
+    if (status.operacaoId !== pendente.operacaoId) throw new Error('O serviÃ§o nÃ£o confirmou o identificador pendente.');
+    if (status.estado !== 'confirmada') {
+      pendente.statusVerificado = true;
+      return false;
+    }
+    if (!Number.isSafeInteger(status.revisao)) throw new Error('O recibo da operaÃ§Ã£o pendente Ã© invÃ¡lido.');
+    comandoDiretoPendente.current = undefined;
+    setRevisaoConfirmada({ geracao: pendente.geracao, revisao: status.revisao as number });
+    try { await consultar(); } catch { setErro('A operaÃ§Ã£o foi confirmada. Os dados serÃ£o atualizados automaticamente.'); }
+    return true;
   }
 
   async function exclusivo<T>(acao: () => Promise<T>, propagarFalha = false) {
@@ -132,22 +182,26 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
       setGeracoes(atuais);
       setFilaLocalVerificada(true);
     }).catch(() => {
-      setErro('Não foi possível conferir a fila financeira local.');
+      setErro('Não foi possível verificar operações antigas deste dispositivo.');
     });
     else setFilaLocalVerificada(true);
     const online = () => {
       setConectada(true);
       if (fila.current) tentarEnvio();
+      else if (comandoDiretoPendente.current) void consultarOperacaoPendente().then(confirmada => { if (!confirmada) void atualizar(); }).catch(() => { setServicoDisponivel(false); });
       else void atualizar();
     };
     const offline = () => setConectada(false);
     window.addEventListener('online', online);
     window.addEventListener('offline', offline);
     const sincronizarVisivel = () => {
-      if (!document.hidden && navigator.onLine && !operando.current) void atualizar();
+      if (!document.hidden && navigator.onLine && !operando.current && Date.now() - ultimaConsulta.current >= 25_000) {
+        if (comandoDiretoPendente.current) void consultarOperacaoPendente().then(confirmada => { if (!confirmada) void atualizar(); }).catch(() => { setServicoDisponivel(false); });
+        else void atualizar();
+      }
     };
-    const intervalo = real ? window.setInterval(sincronizarVisivel, 20_000) : undefined;
-    if (real) document.addEventListener('visibilitychange', sincronizarVisivel);
+    const intervalo = window.setInterval(sincronizarVisivel, 30_000);
+    document.addEventListener('visibilitychange', sincronizarVisivel);
     return () => {
       window.removeEventListener('online', online);
       window.removeEventListener('offline', offline);
@@ -169,7 +223,8 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
       fila.current = ativa;
       setAberta(geracao);
       setItens(registros);
-      if (registros.some(item => item.estado === 'pendente' || item.estado === 'enviando')) await enviar(ativa);
+      setGeracoesConferidas(atuais => [...new Set([...atuais, geracao])]);
+      setErro('');
     });
   }
 
@@ -177,39 +232,47 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
   const aguardandoLeitura = Boolean(revisaoConfirmada && versao?.generation === revisaoConfirmada.geracao
     && versao.revision < revisaoConfirmada.revisao);
   const temPendenciasFila = itens.some(item => item.estado === 'pendente' || item.estado === 'enviando');
-  const filaAtualAberta = aberta !== undefined && aberta === versao?.generation;
+  const bloqueiaFilaLegada = !filaLocalVerificada || geracoes.some(g => !geracoesConferidas.includes(g))
+    || temPendenciasFila;
   const estadoGravacao = decidirEstadoGravacao({ gravavel, somenteLeitura: Boolean(real?.readOnly), ocupado,
-    aguardandoLeitura, temPendenciasFila, producao: Boolean(real), conectada, filaLocalVerificada,
-    quantidadeFilasLocais: geracoes.length, filaEstaAberta: aberta !== undefined, filaAtualAberta });
-  const { podeSalvar, modo: modoGravacao, motivo: motivoBloqueio } = estadoGravacao;
+    aguardandoLeitura, conectada, servicoDisponivel, filaLegadaVerificada: filaLocalVerificada,
+    filaLegadaBloqueia: bloqueiaFilaLegada });
+  const podeSalvar = estadoGravacao.podeSalvar;
+  const motivoBloqueio = estadoGravacao.motivo;
 
   async function registrar(base: DadosPersistidos, alteracao: Record<string, unknown>) {
-    const ativa = fila.current, sync = base._sync;
+    const sync = base._sync;
     if (!podeSalvar || !sync) return false;
-    if (!ativa && modoGravacao === 'direto' && real) {
-      if (!conectada || !navigator.onLine) throw new Error('Sem conexão. A operação não foi enviada; conecte-se e tente novamente.');
+    if (navigator.onLine && conectada) {
       const assinatura = JSON.stringify(alteracao);
       const anterior = comandoDiretoPendente.current;
       if (anterior && (anterior.geracao !== sync.generation || anterior.revisao !== sync.revision || anterior.assinatura !== assinatura)) {
         throw new Error('A confirmação de uma operação anterior está pendente. Atualize os dados e confira o histórico antes de iniciar outra.');
       }
-      const comando = anterior ?? { operacaoId: crypto.randomUUID(), geracao: sync.generation, revisao: sync.revision, assinatura };
+      if (anterior && !anterior.statusVerificado && await consultarOperacaoPendente()) return true;
+      const comando = anterior ?? { operacaoId: crypto.randomUUID(), geracao: sync.generation, revisao: sync.revision, assinatura, statusVerificado: false };
       comandoDiretoPendente.current = comando;
       const enviado = await exclusivo(async () => {
         const token = await obterToken();
         if (!token) throw new Error('Autentique a conta para registrar a operação.');
         let resposta: Response;
         try {
-          resposta = await fetch(`/api/financeiro?espaco=${encodeURIComponent(espacoId)}`, {
+          const destino = real ? `/api/financeiro?espaco=${encodeURIComponent(espacoId)}` : `/espacos/${encodeURIComponent(espacoId)}/comandos`;
+          resposta = await fetch(destino, {
             method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(12_000),
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Appcar-Conta-Fila': uid },
             body: JSON.stringify({ operacaoId: comando.operacaoId, geracao: comando.geracao, revisao: comando.revisao, alteracao }),
           });
         } catch {
+          try { if (await consultarOperacaoPendente()) return true; } catch { setServicoDisponivel(false); }
           throw new Error('Não foi possível confirmar a resposta do servidor. A mesma operação foi preservada para uma tentativa segura; não inicie outra até conferir os dados.');
         }
+        setServicoDisponivel(resposta.status < 500);
         if (!resposta.ok) {
           const falha = await resposta.json().catch(() => ({})) as { erro?: unknown };
+          if (resposta.status >= 500) {
+            try { if (await consultarOperacaoPendente()) return true; } catch { setServicoDisponivel(false); }
+          }
           if (resposta.status >= 400 && resposta.status < 500) comandoDiretoPendente.current = undefined;
           throw new Error(typeof falha.erro === 'string' ? falha.erro : 'O serviço recusou a operação. Atualize os dados e confira o motivo.');
         }
@@ -221,26 +284,14 @@ export function useFinanceiroIntegrado(identidade: SessaoFinanceiraLocal | Sessa
         comandoDiretoPendente.current = undefined;
         setRevisaoConfirmada({ geracao: sync.generation, revisao: recibo.revisao as number });
         try { await consultar(); }
-        catch { setErro('A operação foi confirmada, mas a atualização da tela falhou. Use Atualizar dados confirmados.'); }
+        catch { setErro('A operação foi confirmada, mas os dados ainda não sincronizaram. O painel tentará atualizar automaticamente.'); }
         return true;
       }, true);
       return enviado === true;
     }
-    if (!ativa) return false;
-    if (ativa.geracao !== sync.generation) {
-      throw new Error('Este formulário pertence a uma geração anterior. Confira os dados e reabra o formulário antes de enviar.');
-    }
-    const item = await exclusivo(async () => {
-      const salvo = await ativa.fila.enfileirar(sync.revision, alteracao);
-      setItens(atuais => [...atuais, salvo]);
-      setGeracoes(atuais => [...new Set([...atuais, ativa.geracao])]);
-      return salvo;
-    });
-    if (!item) return false;
-    void exclusivo(() => enviar(ativa));
-    return true;
+    throw new Error('Sem conexão. Nenhuma operação foi enfileirada; os campos preenchidos foram preservados.');
   }
 
-  return { dados, caixinhas: leituraConfirmada?.caixinhas, itens, geracoes, aberta, erro, ocupado, podeSalvar, registrar, atualizar, tentarEnvio, desbloquear,
-    producao: Boolean(real), gravavel, modoGravacao, motivoBloqueio };
+  return { dados, caixinhas: leituraConfirmada?.caixinhas, itens, geracoes, geracoesConferidas, aberta, erro, ocupado, podeSalvar, registrar, atualizar, tentarEnvio, desbloquear,
+    producao: Boolean(real), gravavel, motivoBloqueio, conectada, servicoDisponivel, sincronizando };
 }
