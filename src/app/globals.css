@@ -959,3 +959,75 @@ tbody tr:nth-child(even) { background: var(--campo); }
     font-size: 0.875rem;
   }
 }
+
+/* Navegação principal responsiva do APPCAR */
+.app-shell { display: block; min-height: 100vh; overflow-x: clip; }
+.app-shell-main { min-width: 0; min-height: 100vh; margin-left: 274px; transition: margin-left .2s ease; }
+.app-shell-recolhido .app-shell-main { margin-left: 76px; }
+.app-shell-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; display: flex; flex-direction: column; width: 274px; overflow-x: hidden; overflow-y: auto; padding: 18px 12px 14px; border-right: 1px solid var(--borda); background: var(--painel); transition: width .2s ease, transform .2s ease; }
+.app-shell-mobile-topo { display: none; }
+.app-shell-nav { display: flex; flex-direction: column; gap: 5px; }
+.app-shell-grupo { margin: 16px 10px 6px; color: var(--suave); font-size: .69rem; font-weight: 750; letter-spacing: .1em; line-height: 1.4; text-transform: uppercase; }
+.app-shell-grupo:first-child { margin-top: 4px; }
+.app-shell-nav-item { position: relative; display: flex; align-items: center; width: 100%; min-height: 46px; gap: 13px; padding: 9px 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--suave); text-align: left; transition: background .15s ease, color .15s ease, border-color .15s ease; }
+.app-shell-pending { width: 8px; height: 8px; flex: 0 0 8px; margin-left: auto; border-radius: 50%; background: #c99331; box-shadow: 0 0 0 3px color-mix(in srgb, #c99331 16%, transparent); }
+.app-shell-nav-item:hover { background: color-mix(in srgb, var(--azul) 9%, transparent); color: var(--texto); }
+.app-shell-nav-item.ativo { border-color: color-mix(in srgb, var(--azul) 35%, var(--borda)); background: color-mix(in srgb, var(--azul) 13%, var(--painel)); color: var(--azul); font-weight: 700; }
+.app-shell-icon { display: block; flex: 0 0 22px; width: 22px; height: 22px; }
+.app-shell-nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell-sidebar-rodape { display: flex; flex-direction: column; gap: 5px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--borda); }
+.app-shell-menu-toggle, .app-shell-profile { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; gap: 8px; border: 1px solid var(--borda); border-radius: 10px; background: var(--campo); color: var(--texto); }
+.app-shell-menu-toggle:hover, .app-shell-profile:hover { border-color: var(--azul); color: var(--azul); }
+.app-shell-header { position: sticky; top: 0; z-index: 20; }
+.app-shell-header .cabecalho-conteudo { min-height: 74px; gap: 12px; }
+.app-shell-header-logo { min-width: 0; margin-right: auto; }
+.app-shell-header-controles { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
+.app-shell-email { max-width: min(240px, 24vw); overflow: hidden; color: var(--suave); text-overflow: ellipsis; white-space: nowrap; }
+.app-shell-content { width: 100%; min-width: 0; padding: 20px 0 34px; }
+.app-pages > .mensagem { margin-bottom: 14px; }
+.app-page:focus { outline: none; }
+.atalhos-painel { margin-top: 22px; }
+.atalhos-grade { display: flex; flex-wrap: wrap; gap: 10px; }
+.app-shell-scrim { display: none; }
+.app-shell-recolhido .app-shell-sidebar { width: 76px; padding-inline: 10px; }
+.app-shell-recolhido .app-shell-nav-item { justify-content: center; padding-inline: 8px; }
+.app-shell-recolhido .app-shell-pending { position: absolute; top: 8px; right: 9px; margin: 0; }
+.app-shell-recolhido .app-shell-nav-label, .app-shell-recolhido .app-shell-grupo { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.app-shell-recolhido .app-shell-sidebar-rodape { padding-top: 10px; }
+
+@media (max-width: 900px) {
+  .app-shell-main, .app-shell-recolhido .app-shell-main { margin-left: 0; }
+  .app-shell-sidebar, .app-shell-recolhido .app-shell-sidebar { inset: 0 auto 0 0; width: min(310px, 88vw); max-width: 100%; padding: 14px 12px calc(16px + env(safe-area-inset-bottom)); transform: translateX(-105%); }
+  .app-shell-sidebar.app-shell-mobile-aberto { transform: translateX(0); box-shadow: 12px 0 32px rgb(0 0 0 / 28%); }
+  .app-shell-mobile-topo { display: flex; align-items: center; justify-content: space-between; min-height: 48px; margin-bottom: 8px; padding: 0 4px 8px; border-bottom: 1px solid var(--borda); color: var(--texto); }
+  .app-shell-mobile-fechar { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid var(--borda); border-radius: 10px; background: var(--campo); color: var(--texto); }
+  .app-shell-recolhido .app-shell-nav-label, .app-shell-recolhido .app-shell-grupo { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; }
+  .app-shell-recolhido .app-shell-nav-item { justify-content: flex-start; padding-inline: 12px; }
+  .app-shell-scrim { position: fixed; inset: 0; z-index: 30; display: block; border: 0; background: rgb(2 8 18 / 58%); }
+  .app-shell-header .cabecalho-conteudo { min-height: 66px; width: 100%; gap: 9px; padding-inline: 12px; }
+  .app-shell-header-logo .appcar-subtitulo { display: none; }
+  .app-shell-header-logo .appcar-palavra { font-size: 1.42rem; }
+  .app-shell-header-controles { gap: 7px; }
+  .app-shell-email { max-width: 27vw; font-size: .8rem; }
+  .app-shell-profile { min-width: 44px; padding: 0 8px; }
+  .app-shell-profile span { display: none; }
+  .app-shell-content { padding-top: 14px; }
+  .app-pages.container { width: calc(100% - 24px); }
+  .atalhos-grade > .botao { flex: 1 1 150px; }
+}
+
+@media (max-width: 480px) {
+  .app-shell-header .cabecalho-conteudo { gap: 6px; padding-inline: 9px; }
+  .app-shell-header-controles { gap: 5px; }
+  .app-shell-email { max-width: 22vw; font-size: .72rem; }
+  .app-shell-header .indicador-conexao { gap: 4px; padding: 4px 6px; font-size: .67rem; }
+  .app-shell-profile { min-width: 42px; min-height: 42px; padding: 0 7px; }
+  .app-shell-menu-toggle { min-width: 42px; min-height: 42px; }
+  .app-pages.container { width: calc(100% - 18px); }
+  .atalhos-grade { flex-direction: column; }
+  .atalhos-grade > .botao { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-main, .app-shell-sidebar, .app-shell-nav-item { transition: none; }
+}

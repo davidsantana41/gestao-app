@@ -12,12 +12,13 @@ import GestaoFamiliar from '@/components/GestaoFamiliar';
 import AppcarLogo from '@/components/AppcarLogo';
 import CadastroMotorista from '@/components/gestao/CadastroMotorista';
 import IndicadorConexao, { type EstadoConexao } from '@/components/gestao/IndicadorConexao';
+import AppShell, { definirSecaoInicial, useNavegacaoApp } from '@/components/gestao/AppShell';
 import RecuperacaoFilaLegada from '@/components/gestao/RecuperacaoFilaLegada';
 import TurnoForm from '@/components/gestao/TurnoForm';
 import CustosFixos from '@/components/gestao/CustosFixos';
 import AvulsoForm from '@/components/gestao/AvulsoForm';
 import { sinalSaldo } from '@/components/gestao/saldo';
-import Relatorios, { Historico } from '@/components/gestao/Relatorios';
+import Relatorios from '@/components/gestao/Relatorios';
 import GestaoCaixinhas from '@/components/gestao/GestaoCaixinhas';
 import { auth } from '@/lib/firebase';
 import { useGestao } from '@/lib/useGestao';
@@ -36,27 +37,10 @@ function Lembrete({ inicial, onSalvar, readOnly = false }: { inicial: string; on
   return <section className="painel"><h2>Lembretes</h2><label className="campo"><span>O que você precisa lembrar?</span><textarea value={visivel} readOnly={readOnly} maxLength={500} placeholder="Manutenção, compromissos, metas…" onChange={e => { if (!dirty) setBase(inicial); setTexto(e.currentTarget.value); }} /></label>{!readOnly && <button className="botao secundario" type="button" onClick={async () => { if (await onSalvar(visivel, dirty ? base : inicial)) { setBase(visivel); setTexto(visivel); } }}>Salvar lembrete</button>}</section>;
 }
 
-function CabecalhoApp({ email, cadastroUid, readOnly, modoEscuro, saindo, convitePendente, contaAberta, estadoConexao, onAbrirConta, onAlternarTema, onSair, onTrocarModulo }: {
-  email: string | null;
-  cadastroUid?: string;
-  readOnly: boolean;
-  modoEscuro: boolean;
-  saindo: boolean;
-  convitePendente: boolean;
-  contaAberta: boolean;
-  estadoConexao?: EstadoConexao;
-  onAbrirConta?: () => void;
-  onAlternarTema?: () => void;
-  onSair?: () => Promise<void>;
-  onTrocarModulo?: () => void;
-}) {
-  return <header className="cabecalho"><div className="container cabecalho-conteudo"><AppcarLogo subtitulo="Gestão do Motorista" /><div className="usuario">{estadoConexao && <IndicadorConexao estado={estadoConexao} />}{cadastroUid ? <CadastroMotorista uid={cadastroUid} email={email} tema={modoEscuro ? 'escuro' : 'claro'} /> : <span>{email}</span>}{readOnly && <span className="selo">Somente visualização</span>}{onTrocarModulo && <button type="button" className="botao discreto" onClick={onTrocarModulo} title="Voltar à seleção de módulos">Módulos</button>}{onAbrirConta && <button type="button" className={`botao ${convitePendente && !contaAberta ? 'conta-acesso pendente' : 'conta-acesso'}`} onClick={onAbrirConta} aria-label={contaAberta ? 'Voltar ao painel principal' : 'Abrir conta e compartilhamento'}>{contaAberta ? 'Voltar ao painel' : 'Meus espaços'}{!contaAberta && convitePendente && <span className="selo convite-badge">Convite pendente</span>}</button>}{!readOnly && onAlternarTema && <button type="button" className="botao discreto" onClick={onAlternarTema}>{modoEscuro ? 'Modo claro' : 'Modo escuro'}</button>}{onSair && <button type="button" className="botao secundario" disabled={saindo} onClick={() => void onSair()}>{saindo ? 'Aguarde…' : 'Sair'}</button>}</div></div></header>;
-}
-
 type DashboardProps = {
   uid: string; email: string | null; readOnly?: boolean; viewerUid?: string;
   sharing?: EstadoCompartilhamento; espacoSelecionado?: EspacoSelecionado;
-  onSelecionarEspaco?: (ownerUid: EspacoSelecionado) => void; contaAberta?: boolean; onAbrirConta?: () => void;
+  onSelecionarEspaco?: (ownerUid: EspacoSelecionado) => void;
   onTrocarModulo?: () => void;
 };
 
@@ -129,9 +113,9 @@ function ResolverDashboard({ viewerUid, ...props }: DashboardProps & { viewerUid
 type OrigemPainel = { storage: ReturnType<typeof useGestao>; financeiro?: never }
   | { financeiro: ReturnType<typeof useFinanceiroIntegrado>; storage?: never };
 
-function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, espacoSelecionado, onSelecionarEspaco, contaAberta = false, onAbrirConta, onTrocarModulo, storage, financeiro }: DashboardProps & OrigemPainel) {
+function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, espacoSelecionado, onSelecionarEspaco, onTrocarModulo, storage, financeiro }: DashboardProps & OrigemPainel) {
   const dados = financeiro ? financeiro.dados : storage?.dados;
-  const [aba, setAba] = useState('turno');
+  const { secao, navegar } = useNavegacaoApp(Boolean(sharing && onSelecionarEspaco));
   const [editando, setEditando] = useState<Lancamento>();
   const [estorno, setEstorno] = useState<{ item: Lancamento; base: DadosPersistidos }>();
   const [formVersao, setFormVersao] = useState(0);
@@ -139,7 +123,6 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
   const [mes, setMes] = useState('');
   const [mensagem, setMensagem] = useState('');
   const [confirmacao, setConfirmacao] = useState<{ titulo: string; descricao: string; confirmar: string; executar: () => void }>();
-  const [saindo, setSaindo] = useState(false);
   const estadoConexao: EstadoConexao | undefined = financeiro
     ? !financeiro.conectada ? 'offline'
       : financeiro.servicoDisponivel === false ? 'indisponivel'
@@ -162,7 +145,7 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
     try { return await financeiro?.registrar(base, criarComando()) ?? false; }
     catch (erro) { setMensagem(erro instanceof Error ? erro.message : 'Confira os valores da operação.'); return false; }
   };
-  const editar = (item: Lancamento) => { setEditando(item); setFormVersao(v => v + 1); setAba('turno'); setMensagem(''); window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); };
+  const editar = (item: Lancamento) => { setEditando(item); setFormVersao(v => v + 1); navegar('turno'); setMensagem(''); window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); };
   const excluir = async (item: Lancamento) => {
     const salvo = financeiro
       ? await financeiro.registrar(dados, { tipo: 'excluir', lancamentoId: item.id })
@@ -196,10 +179,14 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
     const url = URL.createObjectURL(new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `appcar-backup-${dataLocal()}.json`; link.click(); URL.revokeObjectURL(url);
   };
-  const contaView = contaAberta && sharing && espacoSelecionado !== undefined && onSelecionarEspaco && onAbrirConta
-    ? <ContaCompartilhamento estado={sharing} selecionado={espacoSelecionado} onSelecionar={onSelecionarEspaco} onVoltar={onAbrirConta} />
-    : null;
-  return <main className={`app ${dados.modoEscuro ? 'escuro' : 'claro'}`}>
+  const emailCompartilhado = email ?? 'Conta APPCAR';
+  return <AppShell modoEscuro={dados.modoEscuro} secao={secao} onNavegar={navegar} email={emailCompartilhado}
+    somenteLeitura={readOnly} conexao={estadoConexao} onPerfil={(viewerUid || storage) ? () => navegar('configuracoes') : undefined}
+    mostrarEspacos={Boolean(sharing && onSelecionarEspaco)} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} onModulos={onTrocarModulo}
+    onSair={storage || financeiro?.producao ? async () => {
+      try { await storage?.aguardar(); await signOut(auth); }
+      catch { setMensagem('Não foi possível sair. Tente novamente em instantes.'); }
+    } : undefined}>
     {confirmacao && <Confirmacao titulo={confirmacao.titulo} descricao={confirmacao.descricao} confirmar={confirmacao.confirmar} onCancelar={() => setConfirmacao(undefined)} onConfirmar={() => { confirmacao.executar(); setConfirmacao(undefined); }} />}
     {estorno && <div className="overlay-modal" role="dialog" aria-modal="true" aria-labelledby="titulo-estorno">
       <form className="painel modal-conteudo pilha" onSubmit={evento => {
@@ -218,30 +205,32 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
         </div>
       </form>
     </div>}
-    <CabecalhoApp email={email} cadastroUid={!readOnly && viewerUid === uid ? uid : undefined} readOnly={readOnly} modoEscuro={dados.modoEscuro} saindo={saindo} convitePendente={Boolean(sharing?.pendentes.length || sharing?.meuConvite?.status === 'pending')} contaAberta={contaAberta} estadoConexao={estadoConexao} onAbrirConta={onAbrirConta} onAlternarTema={alternarTema} onTrocarModulo={onTrocarModulo} onSair={storage || financeiro?.producao ? async () => {
-      setSaindo(true); try { await storage?.aguardar(); await signOut(auth); } catch { setMensagem('Não foi possível sair. Tente novamente em instantes.'); } finally { setSaindo(false); }
-    } : undefined} />
-    {contaView ? <div className="container conteudo">{contaView}</div> : <div className="container conteudo">
+    <div className="container conteudo app-pages">
       {(storage || financeiro?.producao) && <VerificarEmail />}
-      <div className="boas-vindas"><div><p className="sobretitulo">{readOnly ? 'ESPAÇO COMPARTILHADO' : 'GESTÃO DO MOTORISTA'}</p><h1>{readOnly ? 'Dados do proprietário' : 'Seu painel de trabalho'}</h1><p>{readOnly ? 'Você está consultando este espaço em modo Somente visualização.' : 'Acompanhe cada turno e dê um destino ao seu dinheiro.'}</p></div><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>{!readOnly && <button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button>}</div></div>
-      {onAbrirConta && <div className="espaco-atual" role="status"><span>Espaço atual</span><strong>{readOnly ? 'Compartilhado · Somente visualização' : 'Meus dados'}</strong><button type="button" className="botao discreto" onClick={onAbrirConta}>Espaços compartilhados</button></div>}
       {financeiro && (!financeiro.conectada || financeiro.servicoDisponivel === false) && <p className="barra-status" role="status">
         {!financeiro.conectada ? 'Sem conexão. Os campos serão preservados e novas gravações estão bloqueadas.' : 'Serviço financeiro indisponível. Reconectando automaticamente…'}
       </p>}
-      {financeiro?.producao && !readOnly && <RecuperacaoFilaLegada financeiro={financeiro} />}
-      {storage && <div className="barra-status"><span className="ponto" /><p role="status">{storage.status}</p><button type="button" className="botao discreto" onClick={storage.tentarNovamente}>Verificar sincronização</button></div>}
-      {!readOnly && storage && storage.recuperacoes.length > 0 && <section className="painel aviso"><h2>Cópias locais de outras sessões</h2><p>Há cópias com alterações pendentes neste navegador. Recuperar uma cópia preserva os dados atuais e exige comparação com a nuvem.</p>{storage.recuperacoes.map((copia, indice) => <button key={copia.key} type="button" className="botao secundario" onClick={() => setConfirmacao({ titulo: 'Recuperar cópia local?', descricao: 'Os dados atuais serão preservados antes da recuperação. Nenhuma gravação na nuvem será feita automaticamente.', confirmar: 'Recuperar cópia', executar: () => { if (storage.recuperar(copia.key)) { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); } } })}>Recuperar cópia {indice + 1} ({copia.data.historico.length} lançamentos)</button>)}</section>}
       {storage?.erro && <p role="alert" className="mensagem erro">{storage.erro}</p>}
       {!readOnly && storage?.conflito && <section className="painel aviso" aria-labelledby="titulo-conflito"><h2 id="titulo-conflito">Escolha a versão dos seus dados</h2><p>Este navegador e a nuvem têm dados diferentes. Compare as versões antes de escolher. Elas não serão mescladas.</p><div className="comparacao-versoes">{[['Neste navegador', dados], ['Na nuvem', storage.dadosNuvem]].map(([nome, versao]) => {
         if (!versao || typeof versao === 'string') return null;
         const resumoVersao = resumir(versao.historico);
         return <div key={String(nome)}><h3>{String(nome)}</h3><p>{versao.historico.length} lançamentos</p><p>Saldo principal: <strong data-saldo={sinalSaldo(resumoVersao.liquido)}>{moeda(resumoVersao.liquido)}</strong></p></div>;
       })}</div><p>As duas cópias serão guardadas neste navegador antes da troca. A quantidade de lançamentos não indica qual versão é mais recente. Você também pode exportar um backup dos dados em uso.</p>{storage.geracaoAnterior && <p className="mensagem aviso">Esta cópia pertence a uma geração anterior à reinicialização. Exporte-a se precisar consultar os registros antigos. Ela não pode substituir os dados atuais.</p>}<div className="acoes"><button type="button" className="botao primario" disabled={storage.geracaoAnterior} onClick={() => escolher('local')}>Usar dados deste navegador</button><button type="button" className="botao secundario" onClick={() => escolher('nuvem')}>Usar dados da nuvem</button></div></section>}
-        <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque" data-saldo={sinalSaldo(resumo.liquido)}><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Total reservado nas caixinhas</span><strong>{saldos.reservadoCentavos === null ? 'Em revisão' : moeda(saldos.reservadoCentavos / 100)}</strong><small>Saldos atestados</small></div><div className="metrica"><span>Saldo financeiro consolidado</span><strong>{saldos.consolidadoCentavos === null ? 'Em revisão' : moeda(saldos.consolidadoCentavos / 100)}</strong><small>Principal + caixinhas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
-      <nav className="abas" aria-label="Seções do painel">{[['turno','Registrar turno'], ['caixinhas','Caixinhas'], ['relatorios','Histórico e relatórios'], ['configuracoes','Custos fixos'], ['privacidade','Privacidade']].map(([id, nome]) => <button type="button" key={id} aria-current={aba === id ? 'page' : undefined} onClick={() => setAba(id)}>{nome}</button>)}</nav>
       {mensagem && <p role={financeiro ? 'alert' : 'status'} className={`mensagem ${financeiro ? 'erro' : 'sucesso'}`}>{mensagem}</p>}
-      <div hidden={aba !== 'turno'} className="pilha">
-        {!readOnly && <TurnoForm key={`${editando?.id || 'novo'}-${formVersao}-${financeiro ? 'servico' : dados._sync?.generation ?? 0}`} dados={dados} original={editando} bloquearEnvio={bloquearEnvio}
+
+      <section id="pagina-visao-geral" className="app-page" tabIndex={-1} hidden={secao !== 'visao-geral'} aria-labelledby="titulo-visao-geral">
+        <div className="boas-vindas"><div><p className="sobretitulo">GESTÃO DO MOTORISTA</p><h1 id="titulo-visao-geral">Visão geral</h1><p>{readOnly ? 'Resumo do espaço em modo somente visualização.' : 'Acompanhe seus resultados e acesse as principais tarefas.'}</p></div></div>
+                <div className="grade-metricas"><div className="metrica"><span>Faturamento acumulado</span><strong>{moeda(resumo.faturamento)}</strong><small>Todo o histórico</small></div><div className="metrica destaque" data-saldo={sinalSaldo(resumo.liquido)}><span>Saldo principal</span><strong>{moeda(resumo.liquido)}</strong><small>Após despesas e reservas</small></div><div className="metrica"><span>Total reservado nas caixinhas</span><strong>{saldos.reservadoCentavos === null ? 'Em revisão' : moeda(saldos.reservadoCentavos / 100)}</strong><small>Saldos atestados</small></div><div className="metrica"><span>Saldo financeiro consolidado</span><strong>{saldos.consolidadoCentavos === null ? 'Em revisão' : moeda(saldos.consolidadoCentavos / 100)}</strong><small>Principal + caixinhas</small></div><div className="metrica"><span>Combustível acumulado</span><strong>{moeda(resumo.combustivel)}</strong><small>Todos os abastecimentos</small></div><div className="metrica"><span>Dias trabalhados</span><strong>{resumo.dias}</strong><small>{dados.historico.length} lançamentos salvos</small></div></div>
+        <section className="painel atalhos-painel"><h2>Acesso rápido</h2><div className="atalhos-grade">
+          {!readOnly && <button type="button" className="botao primario" onClick={() => navegar('turno')}>Registrar turno</button>}
+          <button type="button" className="botao secundario" onClick={() => navegar('caixinhas')}>Acessar caixinhas</button>
+          <button type="button" className="botao secundario" onClick={() => navegar('relatorios')}>Consultar relatórios</button>
+        </div></section>
+      </section>
+
+      <section id="pagina-turno" className="app-page pilha" tabIndex={-1} hidden={secao !== 'turno'} aria-labelledby="titulo-turno">
+        <div className="boas-vindas"><div><p className="sobretitulo">GESTÃO DO MOTORISTA</p><h1 id="titulo-turno">Registrar turno</h1><p>Lançamento, abastecimento, quilometragem e reservas do turno.</p></div></div>
+                {!readOnly && <TurnoForm key={`${editando?.id || 'novo'}-${formVersao}-${financeiro ? 'servico' : dados._sync?.generation ?? 0}`} dados={dados} original={editando} bloquearEnvio={bloquearEnvio}
           onComando={financeiro && ((form, base) => {
             void registrar(base, () => ({
               tipo: 'turno', ...(editando && { lancamentoId: editando.id }), data: form.data,
@@ -270,11 +259,12 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
             valorCentavos: paraCentavos(form.valor), ...(form.tipo !== 'entrada' && { origem: form.origem }),
           })))}
           onSalvar={(item, base) => { const salvo = storage?.atualizar(d => ({ ...d, historico: [item, ...d.historico] }), base); if (salvo) setMensagem('Movimentação registrada.'); return Boolean(salvo); }} />}
-        <Lembrete key={`lembrete-${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} inicial={dados.lembrete} readOnly={readOnly || Boolean(financeiro && (!financeiro.producao || bloquearEnvio))} onSalvar={salvarLembrete} />
-        <Historico itens={dados.historico.slice(0, 10)} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || financeiro ? undefined : pedirExclusao} onEstornar={abrirEstorno} />
-      </div>
-      {aba === 'caixinhas' && (
-        <GestaoCaixinhas
+
+      </section>
+
+      <section id="pagina-caixinhas" className="app-page" tabIndex={-1} hidden={secao !== 'caixinhas'} aria-labelledby="titulo-caixinhas">
+        <div className="boas-vindas"><div><p className="sobretitulo">GESTÃO DO MOTORISTA</p><h1 id="titulo-caixinhas">Caixinhas</h1></div></div>
+                <GestaoCaixinhas
           dados={dados}
           readOnly={readOnly || !financeiro?.caixinhas?.acoes.length}
           motivoSomenteLeitura={readOnly ? 'Este espaço está em modo somente visualização.'
@@ -288,19 +278,50 @@ function PainelMotorista({ uid, email, readOnly = false, viewerUid, sharing, esp
             return enviado ? 'confirmada' : false;
           } : undefined}
         />
-      )}
-      {aba === 'relatorios' && <Relatorios dados={dados} caixinhas={financeiro?.caixinhas?.relatorio} onVerCaixinhas={() => setAba('caixinhas')} mes={mes} onMes={setMes} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || financeiro ? undefined : pedirExclusao} onEstornar={abrirEstorno} />}
-      {aba === 'configuracoes' && <CustosFixos key={`${recuperacaoVersao}-${financeiro ? 'servico' : dados._sync?.generation ?? 0}`}
+      </section>
+
+      <section id="pagina-relatorios" className="app-page" tabIndex={-1} hidden={secao !== 'relatorios'} aria-labelledby="titulo-relatorios">
+        <div className="boas-vindas"><div><p className="sobretitulo">GESTÃO DO MOTORISTA</p><h1 id="titulo-relatorios">Histórico e relatórios</h1></div></div>
+        <Relatorios dados={dados} caixinhas={financeiro?.caixinhas?.relatorio} onVerCaixinhas={() => navegar('caixinhas')} mes={mes} onMes={setMes} onEditar={readOnly ? undefined : editar} onExcluir={readOnly || financeiro ? undefined : pedirExclusao} onEstornar={abrirEstorno} />
+      </section>
+
+      <section id="pagina-custos-fixos" className="app-page" tabIndex={-1} hidden={secao !== 'custos-fixos'} aria-labelledby="titulo-custos-fixos">
+        <div className="boas-vindas"><div><p className="sobretitulo">GESTÃO DO MOTORISTA</p><h1 id="titulo-custos-fixos">Custos fixos</h1></div></div>
+        <CustosFixos key={`${recuperacaoVersao}-${financeiro ? 'servico' : dados._sync?.generation ?? 0}`}
         itens={dados.custosFixos} versao={dados._sync} readOnly={readOnly || Boolean(financeiro && !financeiro.producao)}
         bloquearEnvio={bloquearEnvio} onComando={financeiro?.producao ? (itens, base) => registrar({ ...dados, _sync: base }, () => ({
           tipo: 'custos-fixos',
           itens: itens.map(({ id, nome, valorMensal, cor }) => ({ id, nome, valorMensalCentavos: reaisParaCentavos(valorMensal), ...(cor && { cor }) })),
         })) : undefined}
-        onSalvar={(custosFixos, base) => { const salvo = storage?.atualizar(d => ({ ...d, custosFixos }), { ...dados, custosFixos: base }); if (salvo) setMensagem('Custos salvos localmente. Os turnos antigos mantêm o rateio original.'); return Boolean(salvo); }} />}
-      {aba === 'privacidade' && <div className="pilha"><Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage?.dadosNuvem ?? (financeiro?.producao ? dados : null)} readOnly={readOnly || Boolean(financeiro && !financeiro.producao)} />{!readOnly && storage && <ReiniciarDados uid={uid} email={email} plan={storage.reinicio} prepare={storage.prepararReinicio} backup={storage.backupReinicio} exported={storage.marcarBackupExportado} execute={storage.executarReinicio} check={storage.verificarReinicio} onComplete={() => { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); }} />}</div>}
-      <footer>APPCAR · Gestão do seu trabalho · Versão reconstruída</footer>
-    </div>}
-  </main>;
+        onSalvar={(custosFixos, base) => { const salvo = storage?.atualizar(d => ({ ...d, custosFixos }), { ...dados, custosFixos: base }); if (salvo) setMensagem('Custos salvos localmente. Os turnos antigos mantêm o rateio original.'); return Boolean(salvo); }} />
+      </section>
+
+      {sharing && espacoSelecionado !== undefined && onSelecionarEspaco && <section id="pagina-espacos" className="app-page" tabIndex={-1} hidden={secao !== 'espacos'} aria-labelledby="titulo-espacos">
+        <div className="boas-vindas"><div><p className="sobretitulo">CONTA E PREFERÊNCIAS</p><h1 id="titulo-espacos">Meus espaços</h1><p>Gerencie espaços pessoais e compartilhados sem misturar seus dados.</p></div></div>
+        <div className="espaco-atual" role="status"><span>Espaço selecionado</span><strong>{readOnly ? 'Compartilhado · Somente visualização' : 'Meus dados'}</strong></div>
+        <ContaCompartilhamento estado={sharing} selecionado={espacoSelecionado} onSelecionar={onSelecionarEspaco} onVoltar={() => navegar('visao-geral')} />
+      </section>}
+
+      <section id="pagina-configuracoes" className="app-page pilha" tabIndex={-1} hidden={secao !== 'configuracoes'} aria-labelledby="titulo-configuracoes">
+        <div className="boas-vindas"><div><p className="sobretitulo">CONTA E PREFERÊNCIAS</p><h1 id="titulo-configuracoes">Configurações</h1></div></div>
+        {(!readOnly && alternarTema || readOnly) && <section className="painel pilha compacta" aria-labelledby="titulo-aparencia"><h2 id="titulo-aparencia">Aparência</h2><p>Escolha como o APPCAR aparece neste espaço.</p>{!readOnly && alternarTema
+          ? <button type="button" className="botao secundario" onClick={alternarTema}>Ativar modo {dados.modoEscuro ? 'claro' : 'escuro'}</button>
+          : <p className="nota">A aparência deste espaço compartilhado é controlada pelo proprietário.</p>}</section>}
+        {!readOnly && <section className="painel pilha compacta" aria-labelledby="titulo-backup"><h2 id="titulo-backup">Backup</h2><p>Exporte uma cópia dos dados financeiros em uso.</p><button className="botao secundario" type="button" onClick={exportar}>Exportar backup</button></section>}
+        {!readOnly && (viewerUid || storage) && <section className="painel pilha compacta" aria-labelledby="titulo-perfil"><h2 id="titulo-perfil">Perfil e veículo</h2><CadastroMotorista uid={viewerUid ?? uid} email={email} tema={dados.modoEscuro ? 'escuro' : 'claro'} /></section>}
+        <Lembrete key={`lembrete-${recuperacaoVersao}-${dados._sync?.generation ?? 0}`} inicial={dados.lembrete} readOnly={readOnly || Boolean(financeiro && (!financeiro.producao || bloquearEnvio))} onSalvar={salvarLembrete} />
+        {financeiro?.producao && !readOnly && <RecuperacaoFilaLegada financeiro={financeiro} />}
+        {storage && <div className="barra-status"><span className="ponto" /><p role="status">{storage.status}</p><button type="button" className="botao discreto" onClick={storage.tentarNovamente}>Verificar sincronização</button></div>}
+      </section>
+
+      <section id="pagina-privacidade" className="app-page pilha" tabIndex={-1} hidden={secao !== 'privacidade'} aria-labelledby="titulo-privacidade">
+        <div className="boas-vindas"><div><p className="sobretitulo">CONTA E PREFERÊNCIAS</p><h1 id="titulo-privacidade">Privacidade</h1></div></div>
+        <div className="pilha"><Privacidade uid={uid} email={email} dados={dados} dadosNuvem={storage?.dadosNuvem ?? (financeiro?.producao ? dados : null)} readOnly={readOnly || Boolean(financeiro && !financeiro.producao)} />{!readOnly && storage && <ReiniciarDados uid={uid} email={email} plan={storage.reinicio} prepare={storage.prepararReinicio} backup={storage.backupReinicio} exported={storage.marcarBackupExportado} execute={storage.executarReinicio} check={storage.verificarReinicio} onComplete={() => { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); }} />}</div>
+        {!readOnly && storage && storage.recuperacoes.length > 0 && <section className="painel aviso"><h2>Cópias locais de outras sessões</h2><p>Há cópias com alterações pendentes neste navegador. Recuperar uma cópia preserva os dados atuais e exige comparação com a nuvem.</p>{storage.recuperacoes.map((copia, indice) => <button key={copia.key} type="button" className="botao secundario" onClick={() => setConfirmacao({ titulo: 'Recuperar cópia local?', descricao: 'Os dados atuais serão preservados antes da recuperação. Nenhuma gravação na nuvem será feita automaticamente.', confirmar: 'Recuperar cópia', executar: () => { if (storage.recuperar(copia.key)) { setRecuperacaoVersao(v => v + 1); setEditando(undefined); setFormVersao(v => v + 1); } } })}>Recuperar cópia {indice + 1} ({copia.data.historico.length} lançamentos)</button>)}</section>}
+      </section>
+      <footer>APPCAR · Gestão do seu trabalho</footer>
+    </div>
+  </AppShell>;
 }
 
 export default function Home() {
@@ -320,7 +341,6 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
   const [verificacaoFinanceiro, setVerificacaoFinanceiro] = useState<{
     uid: string; hashEsperado: string; autorizado: boolean;
   } | null>(null);
-  const [contaAberta, setContaAberta] = useState(false);
   const [modulo, setModulo] = useState<'selecao' | 'motorista' | 'familiar'>('selecao');
 
   const espacoAtivo = espaco !== 'proprio' && sharing.ativos.some(convite => convite.ownerUid === espaco) ? espaco : 'proprio';
@@ -346,11 +366,25 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
     await signOut(auth);
   };
 
+  const escolherModulo = (valor: 'motorista' | 'familiar') => {
+    definirSecaoInicial();
+    setModulo(valor);
+  };
+  const voltarModulos = () => {
+    definirSecaoInicial();
+    setModulo('selecao');
+  };
+  const selecionarEspaco = (valor: EspacoSelecionado) => {
+    definirSecaoInicial();
+    setVerificacaoFinanceiro(null);
+    setEspaco(valor);
+  };
+
   if (modulo === 'selecao') {
     return (
       <ModuloSelecao
         email={sessao.email}
-        onSelecionar={(mod) => setModulo(mod)}
+        onSelecionar={escolherModulo}
         onSair={handleSair}
       />
     );
@@ -360,7 +394,7 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
     return (
       <GestaoFamiliar
         email={sessao.email}
-        onVoltar={() => setModulo('selecao')}
+        onVoltar={voltarModulos}
         onSair={handleSair}
       />
     );
@@ -388,10 +422,8 @@ function AuthenticatedApp({ sessao }: { sessao: { uid: string; email: string | n
       viewerUid={sessao.uid}
       sharing={sharing}
       espacoSelecionado={espacoAtivo}
-      onSelecionarEspaco={valor => { setVerificacaoFinanceiro(null); setEspaco(valor); }}
-      contaAberta={contaAberta}
-      onAbrirConta={() => setContaAberta(value => !value)}
-      onTrocarModulo={() => setModulo('selecao')}
+      onSelecionarEspaco={selecionarEspaco}
+      onTrocarModulo={voltarModulos}
     />
   );
 }

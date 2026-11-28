@@ -118,6 +118,30 @@ export const setDoc = async (_ref, dados) => {
     };
     await send('Page.navigate', { url: `http://127.0.0.1:${port}` }, sessionId);
     await evaluate(`new Promise((resolve, reject) => { const start = Date.now(); const timer = setInterval(() => { if (document.querySelector('[data-testid="total-reservas"]')) { clearInterval(timer); resolve(true); } else if (Date.now() - start > 20000) { clearInterval(timer); reject(new Error(document.body.textContent)); } }, 50); })`);
+    assert.equal(await evaluate("document.querySelector('#pagina-visao-geral')?.hidden"), false, 'A gestão deve abrir na visão geral.');
+    await evaluate("[...document.querySelectorAll('.app-shell-nav-item')].find(item => item.textContent.trim() === 'Caixinhas').click()");
+    assert.equal(await evaluate("document.querySelector('#pagina-caixinhas')?.hidden"), false, 'A navegação deve exibir a seção selecionada.');
+    assert.match(await evaluate('location.search'), /secao=caixinhas/);
+    await evaluate("new Promise(resolve => { addEventListener('popstate', resolve, { once: true }); history.back(); })");
+    assert.equal(await evaluate("document.querySelector('#pagina-visao-geral')?.hidden"), false, 'Voltar deve restaurar a seção anterior.');
+    await evaluate("new Promise(resolve => { addEventListener('popstate', resolve, { once: true }); history.forward(); })");
+    assert.equal(await evaluate("document.querySelector('#pagina-caixinhas')?.hidden"), false, 'Avançar deve restaurar a seção seguinte.');
+    await evaluate("new Promise(resolve => { addEventListener('popstate', resolve, { once: true }); history.back(); })");
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
+    await evaluate("new Promise((resolve, reject) => { const start = Date.now(); const timer = setInterval(() => { if (document.querySelector('.app-shell-menu-toggle')?.getAttribute('aria-label') === 'Abrir menu') { clearInterval(timer); resolve(true); } else if (Date.now() - start > 3000) { clearInterval(timer); reject(new Error('Menu móvel não reconheceu o viewport.')); } }, 20); })");
+    await evaluate("document.querySelector('.app-shell-menu-toggle').click()");
+    assert.equal(await evaluate("document.querySelector('.app-shell-sidebar').classList.contains('app-shell-mobile-aberto')"), true, 'O menu móvel deve abrir sobre o conteúdo.');
+    await evaluate("document.querySelector('.app-shell-mobile-fechar').click()");
+    assert.equal(await evaluate("document.querySelector('.app-shell-sidebar').classList.contains('app-shell-mobile-aberto')"), false, 'O botão deve fechar o menu móvel.');
+    await evaluate("document.querySelector('.app-shell-menu-toggle').click()");
+    await evaluate("new Promise((resolve, reject) => { const start = Date.now(); const timer = setInterval(() => { if (document.querySelector('.app-shell-scrim')) { clearInterval(timer); resolve(true); } else if (Date.now() - start > 3000) { clearInterval(timer); reject(new Error('Sobreposição do menu móvel não foi renderizada.')); } }, 20); })");
+    await evaluate("document.querySelector('.app-shell-scrim').click()");
+    assert.equal(await evaluate("document.querySelector('.app-shell-sidebar').classList.contains('app-shell-mobile-aberto')"), false, 'Toque fora deve fechar o menu móvel.');
+    await evaluate("document.querySelector('.app-shell-menu-toggle').click()");
+    await evaluate("new Promise((resolve, reject) => { const start = Date.now(); const timer = setInterval(() => { if (document.querySelector('.app-shell-scrim')) { clearInterval(timer); resolve(true); } else if (Date.now() - start > 3000) { clearInterval(timer); reject(new Error('Menu móvel não abriu para Escape.')); } }, 20); })");
+    await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+    assert.equal(await evaluate("document.querySelector('.app-shell-sidebar').classList.contains('app-shell-mobile-aberto')"), false, 'Escape deve fechar o menu móvel.');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sessionId);
     await evaluate(`window.change = (input, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); };
 window.tick = () => new Promise(resolve => setTimeout(resolve, 50));
 window.button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text);
@@ -150,6 +174,7 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
     const painelPendencias = 'section[aria-labelledby="pendencias-conciliacao-titulo"]';
     for (const [width, height, mobile] of [[1440, 1000, false], [390, 844, true], [320, 740, true]]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }, sessionId);
+      await new Promise(resolve => setTimeout(resolve, 250));
       const pendencias = await evaluate(`(() => {
         const section = document.querySelector(${JSON.stringify(painelPendencias)});
         const detalhes = [...section.querySelectorAll('details')];
@@ -159,6 +184,7 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
           aberto: detalhes[0].open, resumo: summary.textContent, textos: detalhes.map(item => item.textContent),
           controles: section.querySelectorAll('button, input, select, form').length,
           cabe: document.documentElement.scrollWidth <= innerWidth && section.scrollWidth <= section.clientWidth,
+          dimensoes: { viewport: innerWidth, pagina: document.documentElement.scrollWidth, secao: section.clientWidth, conteudo: section.scrollWidth },
         };
       })()`);
       assert.equal(pendencias.textos.length, 3);
@@ -170,7 +196,7 @@ window.rows = () => [...document.querySelectorAll('[data-testid="reserva"]')];`)
       assert.match(pendencias.textos[0], /Pendente de revisão/);
       assert.match(pendencias.textos[1], /Identificador duplicado.*Referência originalduplicada/);
       assert.equal(pendencias.controles, 0);
-      assert.equal(pendencias.cabe, true, 'A consulta deve caber em ' + width + ' px.');
+      assert.equal(pendencias.cabe, true, 'A consulta deve caber em ' + width + ' px: ' + JSON.stringify(pendencias.dimensoes));
     }
     assert.equal(await evaluate('(window.__writes || []).length'), 0, 'Consultar pendências não grava.');
     assert.equal(await evaluate("localStorage.getItem('mock-remote')"), null, 'O histórico simulado deve continuar na cópia original.');
