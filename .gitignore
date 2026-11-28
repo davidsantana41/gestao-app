@@ -39,6 +39,12 @@ firestore-debug.log*
 # vercel
 .vercel
 
+# firebase-tools local CLI cache
+/.firebase-cli-cache/
+
+# local, temporary UI harness kept outside the repository
+/scripts/check-caixinhas-ui.mjs
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

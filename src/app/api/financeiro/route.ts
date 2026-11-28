@@ -1,5 +1,6 @@
 import { consultarFinanceiroReal, gravarFinanceiroReal } from '@/lib/financeiroProducaoServidor';
 import { ErroServico } from '@/lib/executorFinanceiroServidor';
+import { createHash, randomUUID } from 'node:crypto';
 
 export const runtime = 'nodejs';
 
@@ -8,9 +9,17 @@ const responder = (dados: unknown, status = 200) => Response.json(dados, {
 });
 
 function falha(erro: unknown) {
-  return erro instanceof ErroServico
-    ? responder({ erro: erro.message, codigo: erro.codigo }, erro.status)
-    : responder({ erro: 'Serviço financeiro indisponível.' }, 503);
+  if (erro instanceof ErroServico) return responder({ erro: erro.message, codigo: erro.codigo }, erro.status);
+  const nome = erro instanceof Error ? erro.name : typeof erro;
+  const message = erro instanceof Error ? erro.message : String(erro);
+  const requestId = randomUUID();
+  console.error('[api/financeiro] falha não classificada', {
+    requestId,
+    errorName: nome.slice(0, 80),
+    errorHash: createHash('sha256').update(message).digest('hex'),
+    stack: erro instanceof Error ? erro.stack?.split('\n').slice(0, 8).join('\n') : undefined,
+  });
+  return responder({ erro: 'Serviço financeiro indisponível.', requestId }, 503);
 }
 
 async function lerComando(req: Request) {
